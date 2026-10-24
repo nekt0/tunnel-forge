@@ -292,6 +292,25 @@ static int lcp_parse_peer_auth(const uint8_t *lcp, size_t lcp_len, ppp_auth_kind
   return -1;
 }
 
+/* 1 when a peer LCP Configure-Request carries an Authentication-Protocol option (type 3), whatever the protocol. */
+static int lcp_peer_has_auth_option(const uint8_t *lcp, size_t lcp_len) {
+  if (lcp_len < 6u)
+    return 0;
+  const uint8_t *opts = lcp + 4u;
+  size_t rem = lcp_len - 4u;
+  size_t i = 0;
+  while (i + 2u <= rem) {
+    uint8_t t = opts[i];
+    uint8_t ol = opts[i + 1u];
+    if (ol < 2u || i + (size_t)ol > rem)
+      break;
+    if (t == 3u)
+      return 1;
+    i += (size_t)ol;
+  }
+  return 0;
+}
+
 static int lcp_parse_peer_mru(const uint8_t *lcp, size_t lcp_len, uint16_t *mru_out) {
   if (lcp_len < 6u || mru_out == NULL)
     return -1;
@@ -427,7 +446,9 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int lcp_out_include_ac = 1;
   int lcp_peer_framing_seen = 0;
   int lcp_accm_in_cr = 1;
-  int lcp_auth_in_cr = 1;
+  /* The server is the authenticator. Asking it to authenticate to us (Authentication-Protocol in our CR) is not
+   * what Windows/iOS clients do, and Windows RRAS acks it, after which it can wait for a challenge we never send. */
+  int lcp_auth_in_cr = 0;
   /* Phase 1: send initial Configure-Request. */
   int plen = lcp_build_cr(pkt, sizeof(pkt), id, auth, cr_mru, 1, lcp_accm_in_cr, lcp_auth_in_cr);
   if (plen < 0)
@@ -444,8 +465,11 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int peer_cr_hex_done = 0;
   int applied_peer_lcp_auth_hint = 0;
   int pending_resend_cr_after_ack = 0;
-  /* Phase 2: bounded receive/process loop until our current request id is acknowledged. */
-  for (int round = 0; round < 16 && !got_ack; round++) {
+  int peer_cr_acked = 0;
+  int auth_nak_count = 0;
+  /* Phase 2: bounded receive/process loop until our current request id is acknowledged and we have acked the
+   * peer's Configure-Request (LCP is open only when both directions are acked). */
+  for (int round = 0; round < 16 && !(got_ack && peer_cr_acked); round++) {
     int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 4000);
     if (n < 8) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp lcp: recv below minimum n=%d round=%d", n, round);
@@ -483,6 +507,43 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
         lcp_peer_cr_note_acfc(p + 2u, (size_t)lcp_len, &ppp->lcp_acfc);
         lcp_peer_cr_note_pfc(p + 2u, (size_t)lcp_len, &ppp->lcp_pfc);
       }
+      {
+        ppp_auth_kind_t probe_auth = auth;
+        if (lcp_peer_has_auth_option(p + 2u, (size_t)lcp_len) &&
+            lcp_parse_peer_auth(p + 2u, (size_t)lcp_len, &probe_auth) != 0) {
+          /* Peer wants an authentication protocol we do not implement (Windows RRAS proposes EAP 0xc227 first).
+           * Acking it leaves the peer sending EAP-Request/Identity we never answer. Configure-Nak it with
+           * MS-CHAPv2, as Windows clients do, and wait for the peer's next Configure-Request. */
+          if (auth_nak_count < 3) {
+            uint8_t nakbuf[32];
+            size_t nak_prefix = (size_t)(p - in);
+            if (nak_prefix + 11u > sizeof(nakbuf))
+              continue;
+            memcpy(nakbuf, in, nak_prefix);
+            size_t no = nak_prefix;
+            util_write_be16(nakbuf + no, PROTO_LCP);
+            no += 2u;
+            nakbuf[no++] = 3; /* Configure-Nak */
+            nakbuf[no++] = rid;
+            util_write_be16(nakbuf + no, 9u);
+            no += 2u;
+            nakbuf[no++] = 3; /* Authentication-Protocol */
+            nakbuf[no++] = 5;
+            nakbuf[no++] = 0xc2;
+            nakbuf[no++] = 0x23;
+            nakbuf[no++] = 0x81; /* MS-CHAPv2 */
+            auth_nak_count++;
+            tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                              "ppp lcp: peer wants unsupported auth, Configure-Nak id=%u suggest=mschapv2 n=%d",
+                              (unsigned)rid, auth_nak_count);
+            if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, nakbuf, no) < 0)
+              return -1;
+            continue;
+          }
+          tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                            "ppp lcp: peer still requests unsupported auth after %d Configure-Nak", auth_nak_count);
+        }
+      }
       if (!applied_peer_lcp_auth_hint) {
         ppp_auth_kind_t peer_auth = auth;
         if (lcp_parse_peer_auth(p + 2u, (size_t)lcp_len, &peer_auth) == 0) {
@@ -517,6 +578,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       ackbuf[prefix + 2u] = 2;
       if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, ackbuf, total_ack) < 0)
         return -1;
+      peer_cr_acked = 1;
       if (pending_resend_cr_after_ack) {
         pending_resend_cr_after_ack = 0;
         if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, pkt, (size_t)plen) < 0)
@@ -527,9 +589,9 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       continue;
     }
     if (code == 2 && rid == id) {
-      /* Terminal condition: our current Configure-Request is acknowledged. */
+      /* Our current Configure-Request is acknowledged; LCP is open once the peer's is acked as well. */
       got_ack = 1;
-      break;
+      continue;
     }
     if (code == 4 && rid == id) {
       /* Configure-Reject: remove rejected options and resend with next id. */
@@ -588,6 +650,9 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     /* Round budget exhausted without Configure-Ack for our request id. */
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: LCP timeout");
     return -1;
+  }
+  if (!peer_cr_acked) {
+    tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp lcp: our Configure-Request acked, peer Configure-Request not acked");
   }
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: acked final auth=%s acfc=%d pfc=%d mru=%u",
                     ppp_auth_name(auth), ppp != NULL ? ppp->lcp_acfc : -1, ppp != NULL ? ppp->lcp_pfc : -1,
