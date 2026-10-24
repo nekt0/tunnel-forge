@@ -1975,11 +1975,14 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   mbedtls_ctr_drbg_random(&ctr, ni_qm, sizeof(ni_qm));
 
   /* ID payloads: [ID_type=1(IPv4), Protocol, Port(BE), IPv4].
-   * l2tp-psk uses leftprotoport=17/1701 (server) and rightprotoport=17/%any (client). */
+   * Client side is UDP/1701, the same port the inner L2TP packets use (esp_udp.c sends 1701->1701)
+   * and the selector Windows/macOS/iOS clients propose. Windows RRAS will not reuse an SA negotiated
+   * for "UDP/any" to send SCCRP back to 1701; it starts its own Quick Mode instead, which this client
+   * does not answer. Libreswan (rightprotoport=17/%any) accepts 1701 as well. */
   uint8_t id_ci[8], id_cr[8];
   id_ci[0] = 1;
-  id_ci[1] = 17;                 /* IPv4, UDP */
-  util_write_be16(id_ci + 2, 0); /* port = any */
+  id_ci[1] = 17;                    /* IPv4, UDP */
+  util_write_be16(id_ci + 2, 1701); /* L2TP port */
   memcpy(id_ci + 4, ip_us, 4);
   id_cr[0] = 1;
   id_cr[1] = 17;                    /* IPv4, UDP */
