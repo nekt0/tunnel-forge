@@ -100,9 +100,12 @@ static void ike_log_isakmp_summary(const char *ctx, const uint8_t *in, int inlen
       uint8_t proto = body[4];
       uint8_t spi_sz = body[5];
       uint16_t ntype = util_read_be16(body + 6);
-      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
-                        "%s: NOTIFY doi=%u proto=%u spi_len=%u type=%u (0x%04x) - server may reject proposal/PSK", ctx,
-                        doi, proto, spi_sz, ntype, ntype);
+      const char *ntext = ntype == 14   ? "NO-PROPOSAL-CHOSEN (no proposed cipher/hash/DH group accepted)"
+                          : ntype == 24 ? "AUTHENTICATION-FAILED (check PSK)"
+                          : ntype == 29 ? "INVALID-HASH-INFORMATION"
+                                        : "see RFC 2408 notify types";
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "%s: NOTIFY doi=%u proto=%u spi_len=%u type=%u (0x%04x) - %s", ctx,
+                        doi, proto, spi_sz, ntype, ntype, ntext);
     } else {
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "%s: payload[%d] type=%u total_len=%u body_len=%zu", ctx, depth, np,
                         (unsigned)plen, blen);
@@ -812,6 +815,76 @@ static int isakmp_aes128_decrypt(const uint8_t key16[16], const uint8_t iv_in[16
   return 0;
 }
 
+/* IKE Phase 1 DH group descriptions (RFC 2409 Appendix A / RFC 3526). */
+#define IKE_DH_GROUP_MODP1024 2
+#define IKE_DH_GROUP_MODP2048 14
+
+/* RFC 2409 sec 6.2: Second Oakley Group (1024-bit MODP), generator 2. */
+static const uint8_t k_rfc2409_modp1024_p[128] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xc9, 0x0f, 0xda, 0xa2, 0x21, 0x68, 0xc2, 0x34,
+    0xc4, 0xc6, 0x62, 0x8b, 0x80, 0xdc, 0x1c, 0xd1,
+    0x29, 0x02, 0x4e, 0x08, 0x8a, 0x67, 0xcc, 0x74,
+    0x02, 0x0b, 0xbe, 0xa6, 0x3b, 0x13, 0x9b, 0x22,
+    0x51, 0x4a, 0x08, 0x79, 0x8e, 0x34, 0x04, 0xdd,
+    0xef, 0x95, 0x19, 0xb3, 0xcd, 0x3a, 0x43, 0x1b,
+    0x30, 0x2b, 0x0a, 0x6d, 0xf2, 0x5f, 0x14, 0x37,
+    0x4f, 0xe1, 0x35, 0x6d, 0x6d, 0x51, 0xc2, 0x45,
+    0xe4, 0x85, 0xb5, 0x76, 0x62, 0x5e, 0x7e, 0xc6,
+    0xf4, 0x4c, 0x42, 0xe9, 0xa6, 0x37, 0xed, 0x6b,
+    0x0b, 0xff, 0x5c, 0xb6, 0xf4, 0x06, 0xb7, 0xed,
+    0xee, 0x38, 0x6b, 0xfb, 0x5a, 0x89, 0x9f, 0xa5,
+    0xae, 0x9f, 0x24, 0x11, 0x7c, 0x4b, 0x1f, 0xe6,
+    0x49, 0x28, 0x66, 0x51, 0xec, 0xe6, 0x53, 0x81,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+/* Set up an mbedtls DH context for an IKE group; dhm->len becomes the group width in bytes. */
+static int ike_dh_group_setup(mbedtls_dhm_context *dhm, int group) {
+  mbedtls_mpi P, G;
+  mbedtls_mpi_init(&P);
+  mbedtls_mpi_init(&G);
+  int rc = -1;
+  if (group == IKE_DH_GROUP_MODP1024) {
+    rc = mbedtls_mpi_read_binary(&P, k_rfc2409_modp1024_p, sizeof(k_rfc2409_modp1024_p));
+  } else if (group == IKE_DH_GROUP_MODP2048) {
+    rc = mbedtls_mpi_read_binary(&P, rfc3526_modp2048_p, sizeof(rfc3526_modp2048_p));
+  }
+  if (rc == 0)
+    rc = mbedtls_mpi_lset(&G, 2);
+  if (rc == 0)
+    rc = mbedtls_dhm_set_group(dhm, &P, &G);
+  mbedtls_mpi_free(&P);
+  mbedtls_mpi_free(&G);
+  return rc == 0 ? 0 : -1;
+}
+
+/* Walk the responder's MM2 SA body (DOI, situation, one proposal, one transform) and return the
+ * Oakley group description (attribute type 4) it selected, or 0 if it cannot be determined. */
+static int p1_sa_selected_group(const uint8_t *sa, size_t len) {
+  if (sa == NULL || len < 8 + 8)
+    return 0;
+  size_t o = 8; /* skip DOI + situation */
+  uint8_t spi_size = sa[o + 6];
+  o += 8 + spi_size; /* proposal header + SPI */
+  if (o + 8 > len)
+    return 0;
+  size_t tlen = util_read_be16(sa + o + 2);
+  if (tlen < 8 || o + tlen > len)
+    return 0;
+  size_t a = o + 8;
+  size_t aend = o + tlen;
+  while (a + 4 <= aend) {
+    uint16_t at = util_read_be16(sa + a);
+    uint16_t av = util_read_be16(sa + a + 2);
+    int basic = (at & 0x8000u) != 0;
+    if ((at & 0x7fffu) == 4 && basic)
+      return (int)av;
+    a += basic ? 4u : 4u + av;
+  }
+  return 0;
+}
+
 static size_t build_p1_sa(uint8_t *b, size_t cap) {
   size_t o = 0;
   if (o + 8 + 120 > cap)
@@ -821,15 +894,32 @@ static size_t build_p1_sa(uint8_t *b, size_t cap) {
   util_write_be32(b + o, 1);
   o += 4;
 
-  /* Group 0x000e = MODP2048 (RFC 3526), required by default Libreswan l2tp-psk (modp2048). */
-  static const uint8_t attrs_aes[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
-                                      0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
-  static const uint8_t attrs_3des[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
-                                       0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
+  /* Attributes: 0x8001 enc (7=AES-CBC, 5=3DES), 0x800e key length, 0x8002 hash (2=SHA1),
+   * 0x8003 auth (1=PSK), 0x8004 DH group (14=MODP2048, 2=MODP1024). */
+  static const uint8_t attrs_aes_g14[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
+                                          0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
+  static const uint8_t attrs_3des_g14[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
+                                           0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
+  static const uint8_t attrs_aes_g2[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
+                                         0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x02};
+  static const uint8_t attrs_3des_g2[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
+                                          0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x02};
+  static const struct {
+    const uint8_t *attrs;
+    size_t len;
+  } transforms[] = {
+      {attrs_aes_g14, sizeof(attrs_aes_g14)},
+      {attrs_3des_g14, sizeof(attrs_3des_g14)},
+      {attrs_aes_g2, sizeof(attrs_aes_g2)},
+      {attrs_3des_g2, sizeof(attrs_3des_g2)},
+  };
+  const size_t n_transforms = sizeof(transforms) / sizeof(transforms[0]);
 
   /*
-   * One ISAKMP Proposal with two Transform payloads (AES then 3DES). Libreswan 5.x rejects
-   * two chained Proposal payloads inside the SA ("Proposal must be alone in Oakley SA").
+   * One ISAKMP Proposal with several Transform payloads. Libreswan 5.x rejects two chained
+   * Proposal payloads inside the SA ("Proposal must be alone in Oakley SA"). The modp2048
+   * transforms stay first so servers that accept them keep the previous behaviour; modp1024
+   * (Windows RRAS, older MikroTik/Cisco) is only chosen if the server refuses modp2048.
    */
   size_t prop0 = o;
   b[o++] = IKE_PT_NONE;
@@ -839,33 +929,22 @@ static size_t build_p1_sa(uint8_t *b, size_t cap) {
   b[o++] = 1;
   b[o++] = 1;
   b[o++] = 0;
-  b[o++] = 2;
+  b[o++] = (uint8_t)n_transforms;
 
-  size_t t1s = o;
-  b[o++] = IKE_PT_T;
-  b[o++] = 0;
-  size_t t1_len_m = o;
-  o += 2;
-  b[o++] = 1;
-  b[o++] = 1;
-  b[o++] = 0;
-  b[o++] = 0;
-  memcpy(b + o, attrs_aes, sizeof(attrs_aes));
-  o += sizeof(attrs_aes);
-  util_write_be16(b + t1_len_m, (uint16_t)(o - t1s));
-
-  size_t t2s = o;
-  b[o++] = IKE_PT_NONE;
-  b[o++] = 0;
-  size_t t2_len_m = o;
-  o += 2;
-  b[o++] = 2;
-  b[o++] = 1;
-  b[o++] = 0;
-  b[o++] = 0;
-  memcpy(b + o, attrs_3des, sizeof(attrs_3des));
-  o += sizeof(attrs_3des);
-  util_write_be16(b + t2_len_m, (uint16_t)(o - t2s));
+  for (size_t i = 0; i < n_transforms; i++) {
+    size_t ts = o;
+    b[o++] = (i + 1 < n_transforms) ? IKE_PT_T : IKE_PT_NONE;
+    b[o++] = 0;
+    size_t t_len_m = o;
+    o += 2;
+    b[o++] = (uint8_t)(i + 1);
+    b[o++] = 1;
+    b[o++] = 0;
+    b[o++] = 0;
+    memcpy(b + o, transforms[i].attrs, transforms[i].len);
+    o += transforms[i].len;
+    util_write_be16(b + t_len_m, (uint16_t)(o - ts));
+  }
   util_write_be16(b + prop_len_m, (uint16_t)(o - prop0));
   return o;
 }
@@ -1177,21 +1256,15 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
   mbedtls_dhm_context dhm;
   mbedtls_dhm_init(&dhm);
-  mbedtls_mpi P, G;
-  mbedtls_mpi_init(&P);
-  mbedtls_mpi_init(&G);
-  if (mbedtls_mpi_read_binary(&P, rfc3526_modp2048_p, sizeof(rfc3526_modp2048_p)) != 0 ||
-      mbedtls_mpi_lset(&G, 2) != 0 || mbedtls_dhm_set_group(&dhm, &P, &G) != 0) {
+  if (ike_dh_group_setup(&dhm, IKE_DH_GROUP_MODP2048) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH group setup failed");
-    mbedtls_mpi_free(&P);
-    mbedtls_mpi_free(&G);
     mbedtls_dhm_free(&dhm);
     goto fail_fd;
   }
-  mbedtls_mpi_free(&P);
-  mbedtls_mpi_free(&G);
 
+  /* Public value is generated for MODP2048 now; regenerated below if the server picks MODP1024. */
   uint8_t pubkey[IKE_DH_PUBKEY_BYTES];
+  size_t pubkey_len = IKE_DH_PUBKEY_BYTES;
   if (mbedtls_dhm_make_public(&dhm, (int)dhm.len, pubkey, sizeof(pubkey), mbedtls_ctr_drbg_random, &ctr) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: dhm_make_public failed");
     mbedtls_dhm_free(&dhm);
@@ -1350,6 +1423,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       mleft -= (int)mpl;
     }
   }
+  const int sa2_from_server = (sa2_body_len != 0);
   if (sa2_body_len == 0) {
     /* Fallback: should not happen; use MM1 SA body */
     memcpy(sa2_body, sa_inner, sa_len);
@@ -1359,6 +1433,28 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IKE MM2: saved SA body %zu bytes for HASH_R", sa2_body_len);
   }
   tunnel_log("IKE P1 transform from server: %s", ike->p1_aes ? "AES-128-CBC" : "3DES-CBC");
+
+  {
+    /* Group selected by the responder (attribute 0x8004 in the MM2 SA). 0 = could not be parsed. */
+    int sel_group = sa2_from_server ? p1_sa_selected_group(sa2_body, sa2_body_len) : 0;
+    tunnel_log("IKE P1 DH group from server: %d", sel_group);
+    if (sel_group != 0 && sel_group != IKE_DH_GROUP_MODP2048) {
+      if (sel_group != IKE_DH_GROUP_MODP1024) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM2: server selected unsupported DH group %d", sel_group);
+        mbedtls_dhm_free(&dhm);
+        goto fail_fd;
+      }
+      mbedtls_dhm_free(&dhm);
+      mbedtls_dhm_init(&dhm);
+      if (ike_dh_group_setup(&dhm, sel_group) != 0 ||
+          mbedtls_dhm_make_public(&dhm, (int)dhm.len, pubkey, dhm.len, mbedtls_ctr_drbg_random, &ctr) != 0) {
+        tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM2: DH setup for group %d failed", sel_group);
+        mbedtls_dhm_free(&dhm);
+        goto fail_fd;
+      }
+      pubkey_len = dhm.len;
+    }
+  }
 
   /* Refresh local/remote tuple for NAT-D (must match source port Libreswan sees). */
   lsl = sizeof(lss);
@@ -1403,10 +1499,10 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
 
   pkt[o++] = IKE_PT_NONCE;
   pkt[o++] = 0;
-  util_write_be16(pkt + o, (uint16_t)(4 + sizeof(pubkey)));
+  util_write_be16(pkt + o, (uint16_t)(4 + pubkey_len));
   o += 2;
-  memcpy(pkt + o, pubkey, sizeof(pubkey));
-  o += sizeof(pubkey);
+  memcpy(pkt + o, pubkey, pubkey_len);
+  o += pubkey_len;
 
   pkt[o++] = IKE_PT_NAT_D;
   pkt[o++] = 0;
@@ -1464,8 +1560,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   }
   memcpy(ke_r_buf, am4.ke_r, am4.ke_r_len);
   ke_r_len = am4.ke_r_len;
-  if (normalize_dh_value(ke_r_buf, &ke_r_len, sizeof(ke_r_buf), IKE_DH_PUBKEY_BYTES) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM4: responder KE is not a valid MODP2048 value");
+  if (normalize_dh_value(ke_r_buf, &ke_r_len, sizeof(ke_r_buf), pubkey_len) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM4: responder KE is not a valid MODP value for the negotiated group");
     goto fail_fd;
   }
   memcpy(nr_buf, am4.nr, am4.nr_len);
@@ -1485,8 +1581,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     goto fail_fd;
   }
   mbedtls_dhm_free(&dhm);
-  if (normalize_dh_value(gxy, &gxy_len, sizeof(gxy), IKE_DH_PUBKEY_BYTES) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH shared secret is not a valid MODP2048 value");
+  if (normalize_dh_value(gxy, &gxy_len, sizeof(gxy), pubkey_len) != 0) {
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH shared secret is not a valid MODP value for the negotiated group");
     goto fail_fd;
   }
 
@@ -1596,14 +1692,14 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM: derive_aes128_key failed");
       goto fail_fd;
     }
-    phase1_iv_aes128(pubkey, sizeof(pubkey), ke_r_buf, ke_r_len, p1_iv);
+    phase1_iv_aes128(pubkey, pubkey_len, ke_r_buf, ke_r_len, p1_iv);
   } else {
     if (derive_3des_key(skeyid_e, deskey) != 0) {
       tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM: derive_3des_key failed");
       goto fail_fd;
     }
     uint8_t iv8[8];
-    phase1_iv_sha1(pubkey, sizeof(pubkey), ke_r_buf, ke_r_len, iv8);
+    phase1_iv_sha1(pubkey, pubkey_len, ke_r_buf, ke_r_len, iv8);
     memcpy(p1_iv, iv8, 8);
     memset(p1_iv + 8, 0, 8);
   }
@@ -1636,15 +1732,15 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     // HASH_I = prf(SKEYID, g^xi | g^xr | CKY-I | CKY-R | SAi_b | IDii_b).
     uint8_t hash_i[20];
     {
-      size_t hl = sizeof(pubkey) + ke_r_len + 8 + 8 + sa_hash_len + sizeof(id_body);
+      size_t hl = pubkey_len + ke_r_len + 8 + 8 + sa_hash_len + sizeof(id_body);
       uint8_t *hb = malloc(hl ? hl : 1);
       if (!hb) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: malloc HASH_I material failed");
         goto fail_fd;
       }
       size_t q = 0;
-      memcpy(hb + q, pubkey, sizeof(pubkey));
-      q += sizeof(pubkey);
+      memcpy(hb + q, pubkey, pubkey_len);
+      q += pubkey_len;
       memcpy(hb + q, ke_r_buf, ke_r_len);
       q += ke_r_len;
       memcpy(hb + q, ike->icookie, 8);
@@ -1657,7 +1753,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       q += sizeof(id_body);
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                         "HASH_I material [%s]: pubkey_len=%zu ke_r_len=%zu sa_len=%zu id_body_len=%zu total=%zu",
-                        sa_hash_tag, sizeof(pubkey), ke_r_len, sa_hash_len, sizeof(id_body), q);
+                        sa_hash_tag, pubkey_len, ke_r_len, sa_hash_len, sizeof(id_body), q);
       ike_hex_dump("HASH_I sa", sa_hash, sa_hash_len, sa_hash_len);
       ike_hex_dump("HASH_I id_body", id_body, sizeof(id_body), sizeof(id_body));
       if (prf_hmac_sha1(skeyid, sizeof(skeyid), hb, q, hash_i) != 0) {
@@ -1821,7 +1917,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
     {
       // HASH_R = prf(SKEYID, g^xr | g^xi | CKY-R | CKY-I | SAi_b | IDir_b) (RFC 2409 sec 5.1).
       // ke_r_buf is the owned copy of g^xr; am4.ke_r would be stale (points into in[] overwritten by MM6).
-      size_t hl = ke_r_len + sizeof(pubkey) + 8 + 8 + sa_hash_used_len + id_r_len;
+      size_t hl = ke_r_len + pubkey_len + 8 + 8 + sa_hash_used_len + id_r_len;
       uint8_t *hb = malloc(hl ? hl : 1);
       if (!hb) {
         tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: malloc HASH_R material failed");
@@ -1830,8 +1926,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       size_t q = 0;
       memcpy(hb + q, ke_r_buf, ke_r_len);
       q += ke_r_len;
-      memcpy(hb + q, pubkey, sizeof(pubkey));
-      q += sizeof(pubkey);
+      memcpy(hb + q, pubkey, pubkey_len);
+      q += pubkey_len;
       memcpy(hb + q, ike->rcookie, 8);
       q += 8;
       memcpy(hb + q, ike->icookie, 8);
@@ -1842,7 +1938,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       q += id_r_len;
       tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
                         "HASH_R material [%s]: ke_r_len=%zu pubkey_len=%zu sa_len=%zu id_r_len=%zu total=%zu",
-                        sa_hash_used_tag, ke_r_len, sizeof(pubkey), sa_hash_used_len, id_r_len, q);
+                        sa_hash_used_tag, ke_r_len, pubkey_len, sa_hash_used_len, id_r_len, q);
       ike_hex_dump("HASH_R sa", sa_hash_used, sa_hash_used_len, sa_hash_used_len);
       ike_hex_dump("HASH_R id_r", id_r, id_r_len, id_r_len);
       if (prf_hmac_sha1(skeyid, sizeof(skeyid), hb, q, hash_r_calc) != 0) {
