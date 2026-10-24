@@ -31,16 +31,6 @@
 </p>
 
 <p align="center">
-  <a href="https://f-droid.org/packages/io.github.evokelektrique.tunnelforge/">
-    <img
-      src="https://f-droid.org/badge/get-it-on.svg"
-      alt="Get it on F-Droid"
-      height="80"
-    >
-  </a>
-</p>
-
-<p align="center">
   <a href="#overview">Overview</a> •
   <a href="#screenshots">Screenshots</a> •
   <a href="#install">Install</a> •
