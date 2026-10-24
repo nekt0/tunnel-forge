@@ -311,6 +311,33 @@ static int lcp_peer_has_auth_option(const uint8_t *lcp, size_t lcp_len) {
   return 0;
 }
 
+/* LCP options this client never implements: Callback (13, Microsoft CBCP), Multilink MRRU (17), Short Sequence
+ * Number Header (18) and Endpoint Discriminator (19). Acking Callback makes Windows RRAS run CBCP (0xc029) after
+ * authentication and wait for an answer before IPCP. pppd Configure-Rejects these options too. */
+static int lcp_option_unsupported(uint8_t t) { return t == 13u || t == 17u || t == 18u || t == 19u; }
+
+/* Copy unsupported options of a peer Configure-Request ([lcp] = code byte) into @p out; returns bytes copied. */
+static size_t lcp_collect_unsupported_opts(const uint8_t *lcp, size_t lcp_len, uint8_t *out, size_t cap) {
+  if (lcp_len < 4u || out == NULL)
+    return 0u;
+  const uint8_t *opts = lcp + 4u;
+  size_t rem = lcp_len - 4u;
+  size_t i = 0;
+  size_t o = 0;
+  while (i + 2u <= rem) {
+    uint8_t t = opts[i];
+    uint8_t ol = opts[i + 1u];
+    if (ol < 2u || i + (size_t)ol > rem)
+      break;
+    if (lcp_option_unsupported(t) && o + (size_t)ol <= cap) {
+      memcpy(out + o, opts + i, ol);
+      o += (size_t)ol;
+    }
+    i += (size_t)ol;
+  }
+  return o;
+}
+
 static int lcp_parse_peer_mru(const uint8_t *lcp, size_t lcp_len, uint16_t *mru_out) {
   if (lcp_len < 6u || mru_out == NULL)
     return -1;
@@ -467,6 +494,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int pending_resend_cr_after_ack = 0;
   int peer_cr_acked = 0;
   int auth_nak_count = 0;
+  int opt_reject_count = 0;
   /* Phase 2: bounded receive/process loop until our current request id is acknowledged and we have acked the
    * peer's Configure-Request (LCP is open only when both directions are acked). */
   for (int round = 0; round < 16 && !(got_ack && peer_cr_acked); round++) {
@@ -506,6 +534,34 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       if (ppp != NULL) {
         lcp_peer_cr_note_acfc(p + 2u, (size_t)lcp_len, &ppp->lcp_acfc);
         lcp_peer_cr_note_pfc(p + 2u, (size_t)lcp_len, &ppp->lcp_pfc);
+      }
+      if (opt_reject_count < 3) {
+        /* RFC 1661: Configure-Reject takes precedence over Configure-Nak; send only the rejected options. */
+        uint8_t rejopts[200];
+        size_t rejlen = lcp_collect_unsupported_opts(p + 2u, (size_t)lcp_len, rejopts, sizeof(rejopts));
+        if (rejlen > 0u) {
+          uint8_t rejbuf[256];
+          size_t rej_prefix = (size_t)(p - in);
+          if (rej_prefix + 6u + rejlen > sizeof(rejbuf))
+            continue;
+          memcpy(rejbuf, in, rej_prefix);
+          size_t ro = rej_prefix;
+          util_write_be16(rejbuf + ro, PROTO_LCP);
+          ro += 2u;
+          rejbuf[ro++] = 4; /* Configure-Reject */
+          rejbuf[ro++] = rid;
+          util_write_be16(rejbuf + ro, (uint16_t)(4u + rejlen));
+          ro += 2u;
+          memcpy(rejbuf + ro, rejopts, rejlen);
+          ro += rejlen;
+          opt_reject_count++;
+          tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG,
+                            "ppp lcp: Configure-Reject peer id=%u opts_len=%zu first_type=%u n=%d (callback/multilink)",
+                            (unsigned)rid, rejlen, (unsigned)rejopts[0], opt_reject_count);
+          if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, rejbuf, ro) < 0)
+            return -1;
+          continue;
+        }
       }
       {
         ppp_auth_kind_t probe_auth = auth;
