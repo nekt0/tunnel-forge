@@ -87,16 +87,9 @@ TunnelForge is an Android client for those setups. It connects to existing L2TP/
 
 ## Install
 
-### F-Droid
-
-[<img src="https://f-droid.org/badge/get-it-on.svg" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/io.github.evokelektrique.tunnelforge/)
-
-Install TunnelForge from F-Droid to receive updates through your F-Droid client.
-
 ### GitHub Releases
 
 You can also download the latest APK directly from
-[GitHub Releases](https://github.com/evokelektrique/tunnel-forge/releases/latest)
 for manual installation.
 
 > TunnelForge is only the client; you still need access to a compatible
@@ -213,10 +206,7 @@ sh tool/vpn_debug.sh pluto-logs --container ipsec-vpn-server
 docker exec -it ipsec-vpn-server tail -f /var/log/auth.log
 ```
 
-## Feedback
 
-Use GitHub Issues or [Telegram channel](https://t.me/TunnelForge) for bugs, feature requests or general feedback. When reporting a connection problem,
-include the values used in the profile (such as MTU and DNS), Android version, device model, and app logs (debug).
 
 ## Licensing
 
