@@ -11,22 +11,22 @@
 
 <p align="center">
   <a href="https://github.com/evokelektrique/tunnel-forge/actions/workflows/ci.yml" style="text-decoration: none;">
-    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/evokelektrique/tunnel-forge/ci.yml?branch=main&label=CI">
+    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/python1c/tunnel-forge/ci.yml?branch=main&label=CI">
   </a>
   <a href="https://codecov.io/github/evokelektrique/tunnel-forge" style="text-decoration: none;">
-    <img alt="Coverage" src="https://codecov.io/github/evokelektrique/tunnel-forge/graph/badge.svg?token=2GKLO165LD">
+    <img alt="Coverage" src="https://codecov.io/github/python1c/tunnel-forge/graph/badge.svg?token=2GKLO165LD">
   </a>
   <a href="https://github.com/evokelektrique/tunnel-forge/actions/workflows/codeql.yml" style="text-decoration: none;">
-    <img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/evokelektrique/tunnel-forge/codeql.yml?branch=main&label=CodeQL">
+    <img alt="CodeQL" src="https://img.shields.io/github/actions/workflow/status/python1c/tunnel-forge/codeql.yml?branch=main&label=CodeQL">
   </a>
   <a href="https://github.com/evokelektrique/tunnel-forge/releases/latest" style="text-decoration: none;">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/evokelektrique/tunnel-forge?display_name=tag&label=Release">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/python1c/tunnel-forge?display_name=tag&label=Release">
   </a>
   <a href="https://github.com/evokelektrique/tunnel-forge/releases" style="text-decoration: none;">
-    <img alt="Downloads" src="https://img.shields.io/github/downloads/evokelektrique/tunnel-forge/total?label=Downloads">
+    <img alt="Downloads" src="https://img.shields.io/github/downloads/python1c/tunnel-forge/total?label=Downloads">
   </a>
   <a href="https://github.com/evokelektrique/tunnel-forge/blob/main/LICENSE" style="text-decoration: none;">
-    <img alt="License GPL-3.0" src="https://img.shields.io/github/license/evokelektrique/tunnel-forge?label=License">
+    <img alt="License GPL-3.0" src="https://img.shields.io/github/license/python1c/tunnel-forge?label=License">
   </a>
 </p>
 
