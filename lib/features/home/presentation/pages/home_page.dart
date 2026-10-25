@@ -366,6 +366,9 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
           connectionMode: settingsState.connectionMode,
           splitTunnelSettings: settingsState.splitTunnelSettings,
           proxySettings: settingsState.proxySettings,
+          useDefaultGateway: profile.useDefaultGateway,
+          routes: profile.vpnRoutes,
+          useDeviceDns: profile.dnsUseDevice,
         ),
       ),
     );
