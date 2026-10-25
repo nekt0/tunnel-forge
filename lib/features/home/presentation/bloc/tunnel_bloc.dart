@@ -349,6 +349,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'mode=${request.connectionMode.jsonValue} splitTunnelEnabled=${splitTunnelSettings.enabled} splitTunnelMode=${splitTunnelSettings.mode.jsonValue} '
         'inclusiveApps=${splitTunnelSettings.inclusivePackages.length} exclusiveApps=${splitTunnelSettings.exclusivePackages.length} '
         'http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort} lan=${request.proxySettings.allowLanConnections ? 'on' : 'off'} '
+        'defaultGateway=${request.useDefaultGateway} routes=${request.routes.join(',')} deviceDns=${request.useDeviceDns} '
         'attempt=$attemptId',
         tag: 'tunnel',
       );
@@ -366,6 +367,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           connectionMode: request.connectionMode,
           splitTunnelSettings: request.splitTunnelSettings,
           proxySettings: request.proxySettings,
+          useDefaultGateway: request.useDefaultGateway,
+          routes: request.routes,
+          useDeviceDns: request.useDeviceDns,
           attemptId: attemptId,
         ),
       );
