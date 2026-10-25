@@ -43,6 +43,15 @@ object VpnContract {
     const val ARG_SPLIT_TUNNEL_INCLUSIVE_PACKAGES = "splitTunnelInclusivePackages"
     const val ARG_SPLIT_TUNNEL_EXCLUSIVE_PACKAGES = "splitTunnelExclusivePackages"
 
+    /** Route everything through the VPN (0.0.0.0/0); otherwise only server and configured routes. */
+    const val ARG_USE_DEFAULT_GATEWAY = "useDefaultGateway"
+
+    /** Extra IPv4 networks (`a.b.c.d/n`) routed through the VPN in addition to server routes. */
+    const val ARG_ROUTES = "routes"
+
+    /** Keep the device's own DNS servers instead of the VPN server's or custom ones. */
+    const val ARG_USE_DEVICE_DNS = "useDeviceDns"
+
     const val LIST_VPN_CANDIDATE_APPS = "listVpnCandidateApps"
 
     /** Flutter passes package name as the method argument (String). Returns PNG bytes or null. */
