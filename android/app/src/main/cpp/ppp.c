@@ -29,6 +29,9 @@
 #define PROTO_IPCP 0x8021u
 /** IPv6CP (IANA / RFC 5072); gateway may offer after IPv4 IPCP - we send LCP Protocol-Reject. */
 #define PROTO_IPV6CP 0x8057u
+/** CCP (RFC 1962) and single-link CCP; Windows RRAS offers MPPE through it - we send LCP Protocol-Reject. */
+#define PROTO_CCP 0x80fdu
+#define PROTO_SINGLE_LINK_CCP 0x80fbu
 #define LCP_CODE_PROTOCOL_REJECT 8u
 #define LCP_CODE_ECHO_REQUEST 9u
 #define LCP_CODE_ECHO_REPLY 10u
@@ -1913,6 +1916,20 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
         if (!s_ipv6cp_info_once) {
           s_ipv6cp_info_once = 1;
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IPv6CP: sent LCP Protocol-Reject (IPv4-only link)");
+        }
+      }
+    }
+    return 0;
+  }
+  /* 0x80fd / 0x80fb: CCP. Compression and MPPE are not implemented; reject the protocol so the peer stops
+   * resending Configure-Request (Windows RRAS with optional encryption then continues without MPPE). */
+  if (proto == PROTO_CCP || proto == PROTO_SINGLE_LINK_CCP) {
+    static int s_ccp_info_once;
+    if (esp != NULL && peer != NULL && l2tp != NULL) {
+      if (ppp_send_lcp_protocol_reject(esp_fd, esp, peer, peer_len, l2tp, ppp, proto, p, len) >= 0) {
+        if (!s_ccp_info_once) {
+          s_ccp_info_once = 1;
+          tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "CCP: sent LCP Protocol-Reject (compression/MPPE not supported)");
         }
       }
     }
