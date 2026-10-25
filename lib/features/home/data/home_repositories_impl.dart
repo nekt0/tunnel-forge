@@ -475,6 +475,9 @@ class TunnelRepositoryImpl implements TunnelRepository {
       mtu: request.mtu,
       splitTunnelSettings: request.splitTunnelSettings,
       proxySettings: request.proxySettings,
+      useDefaultGateway: request.useDefaultGateway,
+      routes: request.routes,
+      useDeviceDns: request.useDeviceDns,
     );
   }
 
