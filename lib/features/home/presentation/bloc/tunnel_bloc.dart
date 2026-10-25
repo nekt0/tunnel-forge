@@ -229,7 +229,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         emit,
         AppText.pick(
           'Enter a server hostname or address',
-          'نام میزبان یا نشانی سرور را وارد کنید',
+          'Введите имя хоста или адрес сервера',
         ),
         error: true,
       );
@@ -241,7 +241,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         emit,
         AppText.pick(
           'Select a saved profile to start local proxy',
-          'برای شروع پروکسی محلی یک پروفایل ذخیره‌شده انتخاب کنید',
+          'Выберите сохранённый профиль для запуска локального прокси',
         ),
         error: true,
       );
@@ -256,7 +256,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         emit,
         AppText.pick(
           'HTTP and SOCKS5 ports must be different',
-          'درگاه‌های HTTP و SOCKS5 باید متفاوت باشند',
+          'Порты HTTP и SOCKS5 должны различаться',
         ),
         error: true,
       );
@@ -275,7 +275,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         emit,
         AppText.pick(
           'Open "Select apps" and choose at least one app for inclusive split tunneling.',
-          '«انتخاب برنامه‌ها» را باز کنید و حداقل یک برنامه برای تونل‌سازی شامل انتخاب کنید.',
+          'Откройте выбор приложений и отметьте хотя бы одно приложение для режима включения.',
         ),
         error: true,
       );
@@ -316,7 +316,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
             emit,
             AppText.pick(
               'VPN permission is required',
-              'مجوز وی‌پی‌ان لازم است',
+              'Нужно разрешение на VPN',
             ),
             error: true,
           );
@@ -349,6 +349,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
         'mode=${request.connectionMode.jsonValue} splitTunnelEnabled=${splitTunnelSettings.enabled} splitTunnelMode=${splitTunnelSettings.mode.jsonValue} '
         'inclusiveApps=${splitTunnelSettings.inclusivePackages.length} exclusiveApps=${splitTunnelSettings.exclusivePackages.length} '
         'http=${request.proxySettings.httpPort} socks=${request.proxySettings.socksPort} lan=${request.proxySettings.allowLanConnections ? 'on' : 'off'} '
+        'defaultGateway=${request.useDefaultGateway} routes=${request.routes.join(',')} deviceDns=${request.useDeviceDns} '
         'attempt=$attemptId',
         tag: 'tunnel',
       );
@@ -366,6 +367,9 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           connectionMode: request.connectionMode,
           splitTunnelSettings: request.splitTunnelSettings,
           proxySettings: request.proxySettings,
+          useDefaultGateway: request.useDefaultGateway,
+          routes: request.routes,
+          useDeviceDns: request.useDeviceDns,
           attemptId: attemptId,
         ),
       );
@@ -385,8 +389,8 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
       _toast(
         emit,
         proxyMode
-            ? AppText.pick('Starting proxy...', 'در حال شروع پروکسی...')
-            : AppText.pick('Connecting...', 'در حال اتصال...'),
+            ? AppText.pick('Starting proxy...', 'Запуск прокси...')
+            : AppText.pick('Connecting...', 'Подключение...'),
       );
     } on PlatformException catch (error) {
       _logError(
@@ -532,7 +536,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
                 ? update.detail
                 : proxyMode
                 ? t.proxyReady
-                : AppText.pick('VPN connected', 'وی‌پی‌ان متصل شد'),
+                : AppText.pick('VPN connected', 'VPN подключён'),
           );
         }
         break;
@@ -579,7 +583,7 @@ class TunnelBloc extends Bloc<TunnelEvent, TunnelState> {
           update.detail.isEmpty
               ? AppText.pick(
                   'Couldn\'t establish the tunnel',
-                  'تونل برقرار نشد',
+                  'Не удалось установить туннель',
                 )
               : update.detail,
           error: true,

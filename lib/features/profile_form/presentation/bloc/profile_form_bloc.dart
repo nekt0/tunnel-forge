@@ -75,6 +75,15 @@ final class ProfileFormDnsAutomaticChanged extends ProfileFormEvent {
   List<Object?> get props => [value];
 }
 
+final class ProfileFormDnsUseDeviceChanged extends ProfileFormEvent {
+  const ProfileFormDnsUseDeviceChanged(this.value);
+
+  final bool value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
 final class ProfileFormDns1Changed extends ProfileFormEvent {
   const ProfileFormDns1Changed(this.value);
 
@@ -111,6 +120,24 @@ final class ProfileFormDns2ProtocolChanged extends ProfileFormEvent {
   List<Object?> get props => [value];
 }
 
+final class ProfileFormGatewayChanged extends ProfileFormEvent {
+  const ProfileFormGatewayChanged(this.value);
+
+  final bool value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
+final class ProfileFormRoutesChanged extends ProfileFormEvent {
+  const ProfileFormRoutesChanged(this.value);
+
+  final String value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
 final class ProfileFormMtuChanged extends ProfileFormEvent {
   const ProfileFormMtuChanged(this.value);
 
@@ -136,10 +163,13 @@ class ProfileFormState extends Equatable {
     this.password = '',
     this.psk = '',
     this.dnsAutomatic = true,
+    this.dnsUseDevice = false,
     this.dns1 = '',
     this.dns1Protocol = DnsProtocol.dnsOverUdp,
     this.dns2 = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
+    this.useDefaultGateway = false,
+    this.routes = '',
     this.mtu = '${Profile.defaultVpnMtu}',
     this.messageId = 0,
     this.message,
@@ -156,10 +186,13 @@ class ProfileFormState extends Equatable {
   final String password;
   final String psk;
   final bool dnsAutomatic;
+  final bool dnsUseDevice;
   final String dns1;
   final DnsProtocol dns1Protocol;
   final String dns2;
   final DnsProtocol dns2Protocol;
+  final bool useDefaultGateway;
+  final String routes;
   final String mtu;
   final int messageId;
   final String? message;
@@ -169,6 +202,8 @@ class ProfileFormState extends Equatable {
       dnsAutomatic ? null : _dnsErrorText('DNS 1', dns1, dns1Protocol);
   String? get dns2ErrorText =>
       dnsAutomatic ? null : _dnsErrorText('DNS 2', dns2, dns2Protocol);
+  String? get routesErrorText =>
+      useDefaultGateway ? null : _routesValidationMessage(routes);
   String? get mtuErrorText => _mtuValidationMessage(mtu);
 
   ProfileFormState copyWith({
@@ -183,10 +218,13 @@ class ProfileFormState extends Equatable {
     String? password,
     String? psk,
     bool? dnsAutomatic,
+    bool? dnsUseDevice,
     String? dns1,
     DnsProtocol? dns1Protocol,
     String? dns2,
     DnsProtocol? dns2Protocol,
+    bool? useDefaultGateway,
+    String? routes,
     String? mtu,
     int? messageId,
     String? message,
@@ -204,10 +242,13 @@ class ProfileFormState extends Equatable {
       password: password ?? this.password,
       psk: psk ?? this.psk,
       dnsAutomatic: dnsAutomatic ?? this.dnsAutomatic,
+      dnsUseDevice: dnsUseDevice ?? this.dnsUseDevice,
       dns1: dns1 ?? this.dns1,
       dns1Protocol: dns1Protocol ?? this.dns1Protocol,
       dns2: dns2 ?? this.dns2,
       dns2Protocol: dns2Protocol ?? this.dns2Protocol,
+      useDefaultGateway: useDefaultGateway ?? this.useDefaultGateway,
+      routes: routes ?? this.routes,
       mtu: mtu ?? this.mtu,
       messageId: messageId ?? this.messageId,
       message: clearMessage ? null : (message ?? this.message),
@@ -227,10 +268,13 @@ class ProfileFormState extends Equatable {
     password,
     psk,
     dnsAutomatic,
+    dnsUseDevice,
     dns1,
     dns1Protocol,
     dns2,
     dns2Protocol,
+    useDefaultGateway,
+    routes,
     mtu,
     messageId,
     message,
@@ -241,19 +285,31 @@ class ProfileFormState extends Equatable {
 String? _mtuValidationMessage(String value) {
   final normalized = value.trim();
   if (normalized.isEmpty) {
-    return AppText.pick('Enter an MTU value', 'مقدار MTU را وارد کنید');
+    return AppText.pick('Enter an MTU value', 'Введите значение MTU');
   }
   final mtuParsed = int.tryParse(normalized);
   if (mtuParsed == null) {
-    return AppText.pick('MTU must be a whole number', 'MTU باید عدد صحیح باشد');
+    return AppText.pick(
+      'MTU must be a whole number',
+      'MTU должен быть целым числом',
+    );
   }
   if (mtuParsed < Profile.minVpnMtu || mtuParsed > Profile.maxVpnMtu) {
     return AppText.pick(
       'MTU must be between ${Profile.minVpnMtu} and ${Profile.maxVpnMtu}',
-      'MTU باید بین ${Profile.minVpnMtu} و ${Profile.maxVpnMtu} باشد',
+      'MTU должен быть от ${Profile.minVpnMtu} до ${Profile.maxVpnMtu}',
     );
   }
   return null;
+}
+
+String? _routesValidationMessage(String value) {
+  final invalid = Profile.invalidRoute(value);
+  if (invalid == null) return null;
+  return AppText.pick(
+    'Invalid route "$invalid": use a.b.c.d/nn',
+    'Неверный маршрут «$invalid»: укажите a.b.c.d/nn',
+  );
 }
 
 class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
@@ -280,6 +336,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       (event, emit) =>
           emit(state.copyWith(dnsAutomatic: event.value, saved: false)),
     );
+    on<ProfileFormDnsUseDeviceChanged>(
+      (event, emit) =>
+          emit(state.copyWith(dnsUseDevice: event.value, saved: false)),
+    );
     on<ProfileFormDns1Changed>(
       (event, emit) => emit(state.copyWith(dns1: event.value, saved: false)),
     );
@@ -293,6 +353,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     on<ProfileFormDns2ProtocolChanged>(
       (event, emit) =>
           emit(state.copyWith(dns2Protocol: event.value, saved: false)),
+    );
+    on<ProfileFormGatewayChanged>(
+      (event, emit) =>
+          emit(state.copyWith(useDefaultGateway: event.value, saved: false)),
+    );
+    on<ProfileFormRoutesChanged>(
+      (event, emit) => emit(state.copyWith(routes: event.value, saved: false)),
     );
     on<ProfileFormMtuChanged>(
       (event, emit) =>
@@ -314,16 +381,19 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           profileId: _profilesRepository.newProfileId(),
           loading: false,
           clearLoadError: true,
-          displayName: AppText.pick('New profile', 'پروفایل جدید'),
+          displayName: AppText.pick('New profile', 'Новый профиль'),
           server: 'vpn.example.com',
           user: '',
           password: '',
           psk: '',
           dnsAutomatic: true,
+          dnsUseDevice: false,
           dns1: '',
           dns1Protocol: DnsProtocol.dnsOverUdp,
           dns2: '',
           dns2Protocol: DnsProtocol.dnsOverUdp,
+          useDefaultGateway: false,
+          routes: '',
           mtu: '${Profile.defaultVpnMtu}',
           saved: false,
         ),
@@ -338,7 +408,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           loading: false,
           loadError: AppText.pick(
             'This profile no longer exists.',
-            'این پروفایل دیگر وجود ندارد.',
+            'Этот профиль больше не существует.',
           ),
         ),
       );
@@ -356,10 +426,13 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         password: row.password,
         psk: row.psk,
         dnsAutomatic: profile.dnsAutomatic,
+        dnsUseDevice: profile.dnsUseDevice,
         dns1: profile.dns1Host,
         dns1Protocol: profile.dns1Protocol,
         dns2: profile.dns2Host,
         dns2Protocol: profile.dns2Protocol,
+        useDefaultGateway: profile.useDefaultGateway,
+        routes: profile.routes,
         mtu: '${profile.mtu}',
       ),
     );
@@ -373,7 +446,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     if (serverTrim.isEmpty) {
       emit(
         _messageState(
-          AppText.pick('Enter a server address', 'نشانی سرور را وارد کنید'),
+          AppText.pick('Enter a server address', 'Введите адрес сервера'),
         ),
       );
       return;
@@ -384,7 +457,7 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
       return;
     }
     final mtuParsed = int.parse(state.mtu.trim());
-    if (!state.dnsAutomatic) {
+    if (!state.dnsAutomatic && !state.dnsUseDevice) {
       final invalidDns1 = Profile.invalidDnsServer(
         state.dns1,
         state.dns1Protocol,
@@ -427,12 +500,17 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
           _messageState(
             AppText.pick(
               'Enter at least one DNS server or enable Automatic',
-              'حداقل یک سرور DNS وارد کنید یا حالت خودکار را فعال کنید',
+              'Укажите хотя бы один DNS-сервер или включите «Автоматически»',
             ),
           ),
         );
         return;
       }
+    }
+    final routesErrorText = state.routesErrorText;
+    if (routesErrorText != null) {
+      emit(_messageState(routesErrorText));
+      return;
     }
 
     emit(state.copyWith(saving: true, clearMessage: true, saved: false));
@@ -456,6 +534,9 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
         ),
         dns2Protocol: state.dns2Protocol,
         mtu: Profile.normalizeMtu(mtuParsed),
+        useDefaultGateway: state.useDefaultGateway,
+        routes: Profile.normalizeRoutes(state.routes),
+        dnsUseDevice: state.dnsUseDevice,
       );
       await _profilesRepository.upsertProfile(
         profile,
@@ -466,7 +547,10 @@ class ProfileFormBloc extends Bloc<ProfileFormEvent, ProfileFormState> {
     } catch (_) {
       emit(
         _messageState(
-          AppText.pick('Could not save changes', 'تغییرات ذخیره نشد'),
+          AppText.pick(
+            'Could not save changes',
+            'Не удалось сохранить изменения',
+          ),
           saving: false,
         ),
       );

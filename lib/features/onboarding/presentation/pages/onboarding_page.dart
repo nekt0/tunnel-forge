@@ -474,10 +474,10 @@ class _LanguageChoiceList extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _LanguageChoiceTile(
-          language: AppLanguage.persian,
-          title: t.persian,
-          selected: selectedLanguage == AppLanguage.persian,
-          onTap: () => onLanguageChanged(AppLanguage.persian),
+          language: AppLanguage.russian,
+          title: t.russian,
+          selected: selectedLanguage == AppLanguage.russian,
+          onTap: () => onLanguageChanged(AppLanguage.russian),
         ),
       ],
     );
@@ -509,9 +509,7 @@ class _LanguageChoiceTile extends StatelessWidget {
     final backgroundColor = selected
         ? semanticColors.connected.withValues(alpha: 0.10)
         : colorScheme.surfaceContainerHighest.withValues(alpha: 0.42);
-    final direction = language == AppLanguage.persian
-        ? TextDirection.rtl
-        : TextDirection.ltr;
+    final direction = language.textDirection;
 
     return Semantics(
       button: true,

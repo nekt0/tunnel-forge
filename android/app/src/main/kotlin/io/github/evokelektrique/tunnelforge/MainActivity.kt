@@ -174,6 +174,16 @@ class MainActivity : FlutterActivity() {
                     val proxyHttpPort = sanitizePort(args[VpnContract.ARG_PROXY_HTTP_PORT], ProxyTunnelService.DEFAULT_HTTP_PORT)
                     val proxySocksPort = sanitizePort(args[VpnContract.ARG_PROXY_SOCKS_PORT], ProxyTunnelService.DEFAULT_SOCKS_PORT)
                     val proxyAllowLan = args[VpnContract.ARG_PROXY_ALLOW_LAN] as? Boolean ?: false
+                    val useDefaultGateway = args[VpnContract.ARG_USE_DEFAULT_GATEWAY] as? Boolean ?: false
+                    val useDeviceDns = args[VpnContract.ARG_USE_DEVICE_DNS] as? Boolean ?: false
+                    val routes = mutableListOf<String>()
+                    val routesRaw = args[VpnContract.ARG_ROUTES]
+                    if (routesRaw is List<*>) {
+                        for (e in routesRaw) {
+                            val s = e as? String
+                            if (!s.isNullOrBlank()) routes.add(s.trim())
+                        }
+                    }
                     if (proxyHttpPort == proxySocksPort) {
                         AppLog.e(TAG, "vpn_call connect rejected bad_args (duplicate proxy ports) attempt=$attemptId")
                         result.error("bad_args", "HTTP and SOCKS5 ports must differ", null)
@@ -201,7 +211,7 @@ class MainActivity : FlutterActivity() {
                     }
                     AppLog.d(
                         TAG,
-                        "vpn_call connect start attempt=$attemptId server=$serverTrim userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$mtu mode=$connectionMode splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages.size} exclusiveApps=${exclusivePackages.size} http=$proxyHttpPort socks=$proxySocksPort lan=$proxyAllowLan",
+                        "vpn_call connect start attempt=$attemptId server=$serverTrim userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$mtu mode=$connectionMode splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages.size} exclusiveApps=${exclusivePackages.size} http=$proxyHttpPort socks=$proxySocksPort lan=$proxyAllowLan defaultGateway=$useDefaultGateway routes=${routes.size} deviceDns=$useDeviceDns",
                     )
                     val cleanupTargets = VpnConnectModeSwitchPolicy.cleanupTargetsForStart(connectionMode)
                     if (cleanupTargets.stopVpn) {
@@ -244,6 +254,9 @@ class MainActivity : FlutterActivity() {
                                 putExtra(TunnelVpnService.EXTRA_PROXY_HTTP_PORT, proxyHttpPort)
                                 putExtra(TunnelVpnService.EXTRA_PROXY_SOCKS_PORT, proxySocksPort)
                                 putExtra(TunnelVpnService.EXTRA_PROXY_ALLOW_LAN, proxyAllowLan)
+                                putExtra(TunnelVpnService.EXTRA_USE_DEFAULT_GATEWAY, useDefaultGateway)
+                                putExtra(TunnelVpnService.EXTRA_USE_DEVICE_DNS, useDeviceDns)
+                                putStringArrayListExtra(TunnelVpnService.EXTRA_ROUTES, ArrayList(routes))
                                 putStringArrayListExtra(
                                     TunnelVpnService.EXTRA_SPLIT_TUNNEL_INCLUSIVE_PACKAGES,
                                     ArrayList(inclusivePackages),

@@ -336,14 +336,14 @@ class ConnectivityCheckSettings {
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       return AppText.pick(
         'Enter a valid absolute HTTP or HTTPS URL',
-        'یک نشانی کامل و معتبر HTTP یا HTTPS وارد کنید',
+        'Введите корректный полный URL HTTP или HTTPS',
       );
     }
     final scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') {
       return AppText.pick(
         'Only HTTP and HTTPS URLs are supported',
-        'فقط نشانی‌های HTTP و HTTPS پشتیبانی می‌شوند',
+        'Поддерживаются только URL HTTP и HTTPS',
       );
     }
     return null;
@@ -355,13 +355,13 @@ class ConnectivityCheckSettings {
     if (value == null) {
       return AppText.pick(
         'Enter a whole number of milliseconds',
-        'یک عدد صحیح بر حسب میلی‌ثانیه وارد کنید',
+        'Введите целое число миллисекунд',
       );
     }
     if (value <= 0) {
       return AppText.pick(
         'Enter a timeout greater than 0 ms',
-        'مهلت باید بیشتر از ۰ میلی‌ثانیه باشد',
+        'Тайм-аут должен быть больше 0 мс',
       );
     }
     return null;
@@ -416,6 +416,9 @@ class Profile {
     this.dns2Host = '',
     this.dns2Protocol = DnsProtocol.dnsOverUdp,
     this.mtu = defaultVpnMtu,
+    this.useDefaultGateway = false,
+    this.routes = '',
+    this.dnsUseDevice = false,
   });
 
   /// TUN interface MTU (bytes). Shared default for new profiles and quick-connect.
@@ -437,6 +440,17 @@ class Profile {
   /// Android VpnService [Builder.setMtu]; clamped [minVpnMtu]–[maxVpnMtu].
   final int mtu;
 
+  /// Send all traffic through the VPN. When false, only the routes pushed by
+  /// the server, [routes] and the VPN DNS servers go through the tunnel.
+  final bool useDefaultGateway;
+
+  /// IPv4 networks (`a.b.c.d/n`) added to the server's routes, separated by
+  /// commas, spaces or new lines.
+  final String routes;
+
+  /// Keep the device's own DNS servers instead of the VPN server's or custom.
+  final bool dnsUseDevice;
+
   List<DnsServerConfig> get manualDnsServers => orderedDnsServers(
     dns1Host: dns1Host,
     dns1Protocol: dns1Protocol,
@@ -445,6 +459,7 @@ class Profile {
   );
   String? get invalidDns1 => invalidDnsServer(dns1Host, dns1Protocol);
   String? get invalidDns2 => invalidDnsServer(dns2Host, dns2Protocol);
+  List<String> get vpnRoutes => parseRoutes(routes);
 
   static int normalizeMtu(int value) => value.clamp(minVpnMtu, maxVpnMtu);
 
@@ -453,6 +468,36 @@ class Profile {
     final v = int.tryParse(text.trim());
     if (v == null) return fallback;
     return normalizeMtu(v);
+  }
+
+  static final RegExp _routeSeparators = RegExp(r'[\s,;]+');
+
+  /// Splits free-form [text] into unique route tokens (not validated).
+  static List<String> parseRoutes(String text) {
+    final out = <String>[];
+    for (final token in text.split(_routeSeparators)) {
+      final trimmed = token.trim();
+      if (trimmed.isEmpty || out.contains(trimmed)) continue;
+      out.add(trimmed);
+    }
+    return out;
+  }
+
+  /// Stored form of [text]: route tokens joined with `, `.
+  static String normalizeRoutes(String text) => parseRoutes(text).join(', ');
+
+  /// First token of [text] that is not `a.b.c.d` or `a.b.c.d/n`, or null.
+  static String? invalidRoute(String text) {
+    for (final token in parseRoutes(text)) {
+      final slash = token.indexOf('/');
+      final address = slash < 0 ? token : token.substring(0, slash);
+      if (!isValidIpv4DnsServer(address)) return token;
+      if (slash >= 0) {
+        final prefix = int.tryParse(token.substring(slash + 1));
+        if (prefix == null || prefix < 0 || prefix > 32) return token;
+      }
+    }
+    return null;
   }
 
   static bool isValidIpv4DnsServer(String value) {
@@ -560,17 +605,17 @@ class Profile {
     final requirement = switch (protocol) {
       DnsProtocol.dnsOverTcp || DnsProtocol.dnsOverUdp => AppText.pick(
         'hostname or IPv4',
-        'نام میزبان یا IPv4',
+        'имя хоста или IPv4',
       ),
-      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'نام میزبان'),
+      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'имя хоста'),
       DnsProtocol.dnsOverHttps => AppText.pick(
         'hostname or HTTPS URL',
-        'نام میزبان یا نشانی HTTPS',
+        'имя хоста или URL HTTPS',
       ),
     };
     return AppText.pick(
       '$label: use $requirement',
-      '$label: از $requirement استفاده کنید',
+      '$label: используйте $requirement',
     );
   }
 
@@ -613,6 +658,9 @@ class Profile {
     'dns2Host': normalizeDnsServerForProtocol(dns2Host, dns2Protocol),
     'dns2Protocol': dns2Protocol.jsonValue,
     'mtu': mtu,
+    'useDefaultGateway': useDefaultGateway,
+    'routes': normalizeRoutes(routes),
+    'dnsUseDevice': dnsUseDevice,
   };
 
   static Profile? tryFromJson(Object? raw) {
@@ -650,6 +698,7 @@ class Profile {
     } else if (mtuRaw is String) {
       mtu = mtuFromText(mtuRaw, fallback: defaultVpnMtu);
     }
+    final routes = m['routes'];
     return Profile(
       id: id,
       displayName: displayName,
@@ -661,6 +710,9 @@ class Profile {
       dns2Host: normalizeDnsServerForProtocol(dns2Host, parsedDns2Protocol),
       dns2Protocol: parsedDns2Protocol,
       mtu: mtu,
+      useDefaultGateway: m['useDefaultGateway'] == true,
+      routes: routes is String ? normalizeRoutes(routes) : '',
+      dnsUseDevice: m['dnsUseDevice'] == true,
     );
   }
 }

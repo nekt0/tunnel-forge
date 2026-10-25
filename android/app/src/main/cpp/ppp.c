@@ -29,6 +29,9 @@
 #define PROTO_IPCP 0x8021u
 /** IPv6CP (IANA / RFC 5072); gateway may offer after IPv4 IPCP - we send LCP Protocol-Reject. */
 #define PROTO_IPV6CP 0x8057u
+/** CCP (RFC 1962) and single-link CCP; Windows RRAS offers MPPE through it - we send LCP Protocol-Reject. */
+#define PROTO_CCP 0x80fdu
+#define PROTO_SINGLE_LINK_CCP 0x80fbu
 #define LCP_CODE_PROTOCOL_REJECT 8u
 #define LCP_CODE_ECHO_REQUEST 9u
 #define LCP_CODE_ECHO_REPLY 10u
@@ -1450,6 +1453,219 @@ static int ppp_fix_tun_ipv4_checksums(uint8_t *pkt, size_t len, uint8_t *fixed_p
   return fixed;
 }
 
+/* --- DHCPINFORM over the PPP link (Windows RRAS classless static routes, DHCP options 121 / 249) --- */
+
+#define DHCP_CLIENT_PORT 68u
+#define DHCP_SERVER_PORT 67u
+#define DHCP_MAGIC_COOKIE 0x63825363u
+#define DHCP_FIXED_LEN 240u
+#define DHCP_MIN_LEN 300u
+#define DHCP_OPT_MESSAGE_TYPE 53u
+#define DHCP_OPT_PARAM_REQUEST 55u
+#define DHCP_OPT_CLASSLESS_ROUTES 121u
+#define DHCP_OPT_MS_CLASSLESS_ROUTES 249u
+#define DHCP_MSG_ACK 5u
+#define DHCP_MSG_INFORM 8u
+#define DHCP_INFORM_ATTEMPTS 2
+#define DHCP_INFORM_WAIT_MS 2000
+
+static int s_dhcp_inform_enabled;
+static uint8_t s_dhcp_routes[PPP_DHCP_ROUTES_MAX][5];
+static int s_dhcp_route_count;
+
+static int ppp_send_lcp_echo_reply(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                                   l2tp_session_t *l2tp, ppp_session_t *ppp, const uint8_t *req_lcp, size_t req_len);
+
+void ppp_set_dhcp_inform_enabled(int enabled) { s_dhcp_inform_enabled = enabled ? 1 : 0; }
+
+int ppp_dhcp_routes(uint8_t out[][5], int max) {
+  if (out == NULL || max <= 0)
+    return 0;
+  int n = s_dhcp_route_count < max ? s_dhcp_route_count : max;
+  for (int i = 0; i < n; i++)
+    memcpy(out[i], s_dhcp_routes[i], 5);
+  return n;
+}
+
+static uint32_t dhcp_read_be32(const uint8_t *p) {
+  return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+/**
+ * RFC 3442 classless static routes (same encoding for Microsoft option 249): prefix width, significant octets of
+ * the destination, then a 4-byte router. The router is ignored: every learned route goes into the tunnel. A default
+ * route (width 0) is skipped; that case is the profile's "use VPN as default gateway" setting.
+ */
+static void dhcp_collect_classless_routes(const uint8_t *v, size_t len) {
+  size_t i = 0;
+  while (i < len) {
+    uint8_t width = v[i++];
+    if (width > 32u)
+      return;
+    size_t sig = ((size_t)width + 7u) / 8u;
+    if (i + sig + 4u > len)
+      return;
+    uint8_t net[4] = {0, 0, 0, 0};
+    memcpy(net, v + i, sig);
+    i += sig + 4u;
+    if (width == 0u)
+      continue;
+    int dup = 0;
+    for (int r = 0; r < s_dhcp_route_count; r++) {
+      if (memcmp(s_dhcp_routes[r], net, 4) == 0 && s_dhcp_routes[r][4] == width)
+        dup = 1;
+    }
+    if (dup || s_dhcp_route_count >= PPP_DHCP_ROUTES_MAX)
+      continue;
+    memcpy(s_dhcp_routes[s_dhcp_route_count], net, 4);
+    s_dhcp_routes[s_dhcp_route_count][4] = width;
+    s_dhcp_route_count++;
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp dhcp: route %u.%u.%u.%u/%u", (unsigned)net[0], (unsigned)net[1],
+                      (unsigned)net[2], (unsigned)net[3], (unsigned)width);
+  }
+}
+
+/** @return 1 when @p ip (IPv4 datagram) is the DHCPACK for @p xid; routes are collected. 0 otherwise. */
+static int dhcp_handle_reply(const uint8_t *ip, size_t len, uint32_t xid) {
+  if (len < 20u || (ip[0] >> 4) != 4u)
+    return 0;
+  size_t ihl = (size_t)(ip[0] & 0x0fu) * 4u;
+  size_t tot = util_read_be16(ip + 2);
+  if (ihl < 20u || tot > len || tot < ihl + 8u || ip[9] != 17u)
+    return 0;
+  const uint8_t *udp = ip + ihl;
+  size_t udp_len = util_read_be16(udp + 4);
+  if (util_read_be16(udp + 2) != DHCP_CLIENT_PORT || udp_len < 8u || ihl + udp_len > tot)
+    return 0;
+  const uint8_t *d = udp + 8;
+  size_t dlen = udp_len - 8u;
+  if (dlen < DHCP_FIXED_LEN || d[0] != 2u || dhcp_read_be32(d + 4) != xid ||
+      dhcp_read_be32(d + 236) != DHCP_MAGIC_COOKIE)
+    return 0;
+  int msg_type = 0;
+  const uint8_t *opt121 = NULL;
+  size_t len121 = 0;
+  const uint8_t *opt249 = NULL;
+  size_t len249 = 0;
+  size_t o = DHCP_FIXED_LEN;
+  while (o < dlen) {
+    uint8_t code = d[o++];
+    if (code == 0u)
+      continue;
+    if (code == 255u || o >= dlen)
+      break;
+    uint8_t ol = d[o++];
+    if (o + ol > dlen)
+      break;
+    if (code == DHCP_OPT_MESSAGE_TYPE && ol >= 1u) {
+      msg_type = d[o];
+    } else if (code == DHCP_OPT_CLASSLESS_ROUTES) {
+      opt121 = d + o;
+      len121 = ol;
+    } else if (code == DHCP_OPT_MS_CLASSLESS_ROUTES) {
+      opt249 = d + o;
+      len249 = ol;
+    }
+    o += ol;
+  }
+  if (msg_type != (int)DHCP_MSG_ACK)
+    return 0;
+  /* RFC 3442: when option 121 is present, the client ignores other static route options. */
+  if (opt121 != NULL)
+    dhcp_collect_classless_routes(opt121, len121);
+  else if (opt249 != NULL)
+    dhcp_collect_classless_routes(opt249, len249);
+  tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp dhcp: DHCPACK opt121=%zu opt249=%zu routes=%d", len121, len249,
+                    s_dhcp_route_count);
+  return 1;
+}
+
+/**
+ * After IPCP, ask the server for its static routes the way Windows RAS clients do: a DHCPINFORM broadcast over the
+ * PPP link, answered by the RRAS DHCP relay with options 121/249 when the DHCP server is configured for it.
+ * Best effort: a silent server only costs the wait.
+ *
+ * @return number of routes learned (0 when the server did not answer), -1 on local errors.
+ */
+static int ppp_dhcp_inform(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,
+                           l2tp_session_t *l2tp, ppp_session_t *ppp) {
+  uint8_t rnd[11];
+  if (urandom_bytes(rnd, sizeof(rnd)) != 0)
+    return -1;
+  uint8_t pkt[20u + 8u + DHCP_MIN_LEN];
+  memset(pkt, 0, sizeof(pkt));
+  uint8_t *udp = pkt + 20;
+  uint8_t *d = udp + 8;
+  d[0] = 1; /* BOOTREQUEST */
+  d[1] = 1; /* Ethernet */
+  d[2] = 6;
+  memcpy(d + 4, rnd, 4); /* xid */
+  memcpy(d + 12, ppp->local_ip, 4); /* ciaddr */
+  d[28] = 0x02;          /* locally administered client hardware address */
+  memcpy(d + 29, rnd + 4, 5);
+  util_write_be32(d + 236, DHCP_MAGIC_COOKIE);
+  size_t o = DHCP_FIXED_LEN;
+  d[o++] = DHCP_OPT_MESSAGE_TYPE;
+  d[o++] = 1;
+  d[o++] = DHCP_MSG_INFORM;
+  d[o++] = DHCP_OPT_PARAM_REQUEST;
+  d[o++] = 4;
+  d[o++] = 1;  /* subnet mask */
+  d[o++] = 15; /* domain name */
+  d[o++] = DHCP_OPT_CLASSLESS_ROUTES;
+  d[o++] = DHCP_OPT_MS_CLASSLESS_ROUTES;
+  d[o++] = 255;
+  const size_t udp_len = 8u + DHCP_MIN_LEN;
+  const size_t total = 20u + udp_len;
+  pkt[0] = 0x45;
+  util_write_be16(pkt + 2, (uint16_t)total);
+  pkt[4] = rnd[9];
+  pkt[5] = rnd[10];
+  pkt[8] = 64;
+  pkt[9] = 17;
+  memcpy(pkt + 12, ppp->local_ip, 4);
+  memset(pkt + 16, 0xff, 4); /* 255.255.255.255: RRAS relays it to its DHCP server */
+  util_write_be16(udp + 0, DHCP_CLIENT_PORT);
+  util_write_be16(udp + 2, DHCP_SERVER_PORT);
+  util_write_be16(udp + 4, (uint16_t)udp_len);
+  /* IP and UDP checksums are left 0; ppp_encapsulate_and_send() fills them in. */
+  const uint32_t xid = dhcp_read_be32(d + 4);
+
+  uint8_t in[4096];
+  for (int attempt = 1; attempt <= DHCP_INFORM_ATTEMPTS; attempt++) {
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp dhcp: send DHCPINFORM attempt=%d xid=%08x", attempt,
+                      (unsigned)xid);
+    if (ppp_encapsulate_and_send(esp_fd, esp, peer, peer_len, l2tp, ppp, pkt, total) < 0)
+      return -1;
+    long long deadline = ppp_now_ms() + DHCP_INFORM_WAIT_MS;
+    for (;;) {
+      long long remaining = deadline - ppp_now_ms();
+      if (remaining <= 0)
+        break;
+      int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), (int)remaining);
+      if (n <= 0)
+        break;
+      const uint8_t *p = in;
+      size_t len = (size_t)n;
+      ppp_strip(in, (size_t)n, &p, &len);
+      uint16_t proto = 0u;
+      size_t proto_len = 0u;
+      if (ppp_read_protocol(p, len, &proto, &proto_len) != 0)
+        continue;
+      if (proto == PROTO_LCP && len >= proto_len + 4u && p[proto_len] == (uint8_t)LCP_CODE_ECHO_REQUEST) {
+        (void)ppp_send_lcp_echo_reply(esp_fd, esp, peer, peer_len, l2tp, ppp, p + proto_len, len - proto_len);
+        continue;
+      }
+      if (proto != PROTO_IP)
+        continue;
+      if (dhcp_handle_reply(p + proto_len, len - proto_len, xid))
+        return s_dhcp_route_count;
+    }
+  }
+  tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG, "ppp dhcp: no DHCPACK from server; no server routes");
+  return 0;
+}
+
 /* --- Exported PPP API (negotiate, TUN egress, inbound dispatch) --- */
 
 static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, const ppp_session_t *ppp);
@@ -1457,6 +1673,9 @@ static size_t ppp_write_frame_prefix(uint8_t *buf, size_t cap, uint16_t proto, c
 int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *l2tp,
                   const char *user, const char *password, int tun_mtu, ppp_session_t *ppp) {
   memset(ppp, 0, sizeof(*ppp));
+  const int dhcp_inform = s_dhcp_inform_enabled;
+  s_dhcp_inform_enabled = 0;
+  s_dhcp_route_count = 0;
   ppp->link_mtu = ppp_sanitize_link_mtu(tun_mtu);
   ppp->tcp_mss = ppp_tcp_mss_for_link_mtu(ppp->link_mtu);
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp negotiate: start link_mtu=%u advertised_mru=%u tcp_mss=%u",
@@ -1487,6 +1706,11 @@ int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
   if (ppp_ipcp_negotiate(esp_fd, esp, peer, peer_len, l2tp, ppp) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp negotiate: IPCP did not ack");
     return -1;
+  }
+
+  if (dhcp_inform) {
+    int routes = ppp_dhcp_inform(esp_fd, esp, peer, peer_len, l2tp, ppp);
+    tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp negotiate: server routes=%d", routes);
   }
 
   return 0;
@@ -1692,6 +1916,20 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
         if (!s_ipv6cp_info_once) {
           s_ipv6cp_info_once = 1;
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IPv6CP: sent LCP Protocol-Reject (IPv4-only link)");
+        }
+      }
+    }
+    return 0;
+  }
+  /* 0x80fd / 0x80fb: CCP. Compression and MPPE are not implemented; reject the protocol so the peer stops
+   * resending Configure-Request (Windows RRAS with optional encryption then continues without MPPE). */
+  if (proto == PROTO_CCP || proto == PROTO_SINGLE_LINK_CCP) {
+    static int s_ccp_info_once;
+    if (esp != NULL && peer != NULL && l2tp != NULL) {
+      if (ppp_send_lcp_protocol_reject(esp_fd, esp, peer, peer_len, l2tp, ppp, proto, p, len) >= 0) {
+        if (!s_ccp_info_once) {
+          s_ccp_info_once = 1;
+          tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "CCP: sent LCP Protocol-Reject (compression/MPPE not supported)");
         }
       }
     }

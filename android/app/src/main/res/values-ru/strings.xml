@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="vpn_notification_title">TunnelForge VPN</string>
+    <string name="vpn_notification_connecting">Подключение...</string>
+    <string name="vpn_notification_connected">VPN активен</string>
+    <string name="vpn_notification_connected_profile">Подключено: %1$s</string>
+    <string name="vpn_notification_action_disconnect">Отключить</string>
+    <string name="vpn_notification_channel_name">VPN</string>
+</resources>
