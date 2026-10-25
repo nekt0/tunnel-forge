@@ -209,6 +209,9 @@ class VpnClient {
     int mtu = Profile.defaultVpnMtu,
     SplitTunnelSettings splitTunnelSettings = const SplitTunnelSettings(),
     ProxySettings proxySettings = const ProxySettings(),
+    bool useDefaultGateway = false,
+    List<String> routes = const [],
+    bool useDeviceDns = false,
   }) {
     final mtuClamped = Profile.normalizeMtu(mtu);
     // Flutter keeps DNS slot ordering explicit so Android can preserve DNS 1
@@ -252,6 +255,9 @@ class VpnClient {
         fallback: ProxySettings.defaultSocksPort,
       ),
       VpnContract.argProxyAllowLan: proxySettings.allowLanConnections,
+      VpnContract.argUseDefaultGateway: useDefaultGateway,
+      VpnContract.argRoutes: List<String>.from(routes),
+      VpnContract.argUseDeviceDns: useDeviceDns,
     });
   }
 

@@ -50,6 +50,17 @@ abstract final class VpnContract {
   static const String argSplitTunnelExclusivePackages =
       'splitTunnelExclusivePackages';
 
+  /// Route all traffic through the VPN (0.0.0.0/0); otherwise only the server
+  /// routes and [argRoutes].
+  static const String argUseDefaultGateway = 'useDefaultGateway';
+
+  /// Extra IPv4 networks (`a.b.c.d/n`) routed through the VPN in addition to
+  /// the routes pushed by the server.
+  static const String argRoutes = 'routes';
+
+  /// Keep the device's own DNS servers instead of VPN or custom ones.
+  static const String argUseDeviceDns = 'useDeviceDns';
+
   /// Android: launcher-visible apps as `{packageName, label}` maps.
   static const String listVpnCandidateApps = 'listVpnCandidateApps';
 
