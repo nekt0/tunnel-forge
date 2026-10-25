@@ -287,11 +287,11 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       url,
       invalidMessage: AppText.pick(
         'Release page URL is invalid.',
-        'نشانی صفحه انتشار معتبر نیست.',
+        'Некорректный адрес страницы релиза.',
       ),
       failureMessage: AppText.pick(
         'Could not open the release page.',
-        'صفحه انتشار باز نشد.',
+        'Не удалось открыть страницу релиза.',
       ),
     );
   }
@@ -300,11 +300,11 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     final message = profilesState.profiles.isEmpty
         ? AppText.pick(
             'Create a profile first. You will need a server, username, and tunnel settings before connecting.',
-            'ابتدا یک پروفایل بسازید. پیش از اتصال به سرور، نام کاربری و تنظیمات تونل نیاز دارید.',
+            'Сначала создайте профиль. Для подключения нужны сервер, имя пользователя и настройки туннеля.',
           )
         : AppText.pick(
             'Choose one of your saved profiles before connecting.',
-            'پیش از اتصال یکی از پروفایل‌های ذخیره‌شده را انتخاب کنید.',
+            'Перед подключением выберите один из сохранённых профилей.',
           );
     _toast(message, error: true);
     widget.locator<LogsRepository>().append(
@@ -379,10 +379,10 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     if (visibleLogs.isEmpty) {
       _toast(
         logsState.entries.isEmpty
-            ? AppText.pick('No logs to copy', 'گزارشی برای کپی نیست')
+            ? AppText.pick('No logs to copy', 'Нечего копировать')
             : AppText.pick(
                 'No visible logs to copy',
-                'گزارش نمایانی برای کپی نیست',
+                'Нет видимых записей для копирования',
               ),
       );
       return;
@@ -396,7 +396,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
     _toast(
       AppText.pick(
         'Copied $count ${count == 1 ? 'line' : 'lines'} to clipboard',
-        '$count خط در کلیپ‌بورد کپی شد',
+        'Скопировано строк: $count',
       ),
     );
   }
@@ -408,7 +408,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       _toast(
         AppText.pick(
           'No debug logs to share',
-          'گزارش دیباگی برای اشتراک‌گذاری نیست',
+          'Нет отладочных записей для отправки',
         ),
       );
       return;
@@ -437,14 +437,14 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
       _toast(
         AppText.pick(
           'Prepared $count ${count == 1 ? 'debug line' : 'debug lines'} for sharing',
-          '$count خط دیباگ برای اشتراک‌گذاری آماده شد',
+          'Подготовлено строк отладки: $count',
         ),
       );
     } catch (_) {
       _toast(
         AppText.pick(
           'Could not share debug logs',
-          'اشتراک‌گذاری گزارش‌های دیباگ انجام نشد',
+          'Не удалось отправить отладочный журнал',
         ),
         error: true,
       );
@@ -454,7 +454,7 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
   void _clearLogs() {
     context.read<LogsBloc>().add(const LogsCleared());
     setState(() => _logsStickToBottom = true);
-    _toast(AppText.pick('Logs cleared', 'گزارش‌ها پاک شد'));
+    _toast(AppText.pick('Logs cleared', 'Журнал очищен'));
   }
 
   String _connectButtonLabel(
@@ -817,22 +817,22 @@ class _VpnHomePageViewState extends State<_VpnHomePageView>
                       _kTelegramUrl,
                       invalidMessage: AppText.pick(
                         'Telegram link is invalid.',
-                        'پیوند تلگرام معتبر نیست.',
+                        'Некорректная ссылка Telegram.',
                       ),
                       failureMessage: AppText.pick(
                         'Could not open Telegram.',
-                        'تلگرام باز نشد.',
+                        'Не удалось открыть Telegram.',
                       ),
                     ),
                     onOpenGithub: () => _openExternalUrl(
                       _kProjectGithubUrl,
                       invalidMessage: AppText.pick(
                         'GitHub link is invalid.',
-                        'پیوند GitHub معتبر نیست.',
+                        'Некорректная ссылка GitHub.',
                       ),
                       failureMessage: AppText.pick(
                         'Could not open GitHub.',
-                        'GitHub باز نشد.',
+                        'Не удалось открыть GitHub.',
                       ),
                     ),
                     routingLocked:
