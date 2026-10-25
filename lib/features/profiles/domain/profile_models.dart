@@ -336,14 +336,14 @@ class ConnectivityCheckSettings {
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       return AppText.pick(
         'Enter a valid absolute HTTP or HTTPS URL',
-        'یک نشانی کامل و معتبر HTTP یا HTTPS وارد کنید',
+        'Введите корректный полный URL HTTP или HTTPS',
       );
     }
     final scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') {
       return AppText.pick(
         'Only HTTP and HTTPS URLs are supported',
-        'فقط نشانی‌های HTTP و HTTPS پشتیبانی می‌شوند',
+        'Поддерживаются только URL HTTP и HTTPS',
       );
     }
     return null;
@@ -355,13 +355,13 @@ class ConnectivityCheckSettings {
     if (value == null) {
       return AppText.pick(
         'Enter a whole number of milliseconds',
-        'یک عدد صحیح بر حسب میلی‌ثانیه وارد کنید',
+        'Введите целое число миллисекунд',
       );
     }
     if (value <= 0) {
       return AppText.pick(
         'Enter a timeout greater than 0 ms',
-        'مهلت باید بیشتر از ۰ میلی‌ثانیه باشد',
+        'Тайм-аут должен быть больше 0 мс',
       );
     }
     return null;
@@ -605,17 +605,17 @@ class Profile {
     final requirement = switch (protocol) {
       DnsProtocol.dnsOverTcp || DnsProtocol.dnsOverUdp => AppText.pick(
         'hostname or IPv4',
-        'نام میزبان یا IPv4',
+        'имя хоста или IPv4',
       ),
-      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'نام میزبان'),
+      DnsProtocol.dnsOverTls => AppText.pick('hostname', 'имя хоста'),
       DnsProtocol.dnsOverHttps => AppText.pick(
         'hostname or HTTPS URL',
-        'نام میزبان یا نشانی HTTPS',
+        'имя хоста или URL HTTPS',
       ),
     };
     return AppText.pick(
       '$label: use $requirement',
-      '$label: از $requirement استفاده کنید',
+      '$label: используйте $requirement',
     );
   }
 
