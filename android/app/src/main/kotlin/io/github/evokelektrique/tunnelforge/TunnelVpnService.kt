@@ -161,6 +161,9 @@ class TunnelVpnService : VpnService() {
                         ProxyTunnelService.DEFAULT_SOCKS_PORT,
                     )
                 val proxyAllowLan = intent.getBooleanExtra(EXTRA_PROXY_ALLOW_LAN, false)
+                val useDefaultGateway = intent.getBooleanExtra(EXTRA_USE_DEFAULT_GATEWAY, false)
+                val configuredRoutes = intent.getStringArrayListExtra(EXTRA_ROUTES).orEmpty()
+                val useDeviceDns = intent.getBooleanExtra(EXTRA_USE_DEVICE_DNS, false)
                 val proxyConfig =
                     ProxyRuntimeConfig(
                         httpEnabled = true,
@@ -201,7 +204,7 @@ class TunnelVpnService : VpnService() {
                 VpnTunnelEvents.emitEngineLog(
                     Log.DEBUG,
                     TAG,
-                    "${prefixAttempt(attemptId)}ACTION_START accepted server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"}",
+                    "${prefixAttempt(attemptId)}ACTION_START accepted server=$server userPresent=${user.isNotEmpty()} pskPresent=${psk.isNotEmpty()} dnsMode=${if (useDeviceDns) "device" else if (dnsAutomatic) "automatic" else "manual"} dns=${dnsServers.joinToString(",") { "${it.host}[${it.protocol.shortLabel}]" }} mtu=$tunMtu splitTunnelEnabled=$splitTunnelEnabled splitTunnelMode=$splitTunnelMode inclusiveApps=${inclusivePackages?.size ?: 0} exclusiveApps=${exclusivePackages?.size ?: 0} http=${proxyConfig.httpPort} socks=${proxyConfig.socksPort} lan=${if (proxyAllowLan) "on" else "off"} defaultGateway=$useDefaultGateway routes=${configuredRoutes.joinToString(",")}",
                 )
                 // TUN establish() can block; do not hold up onStartCommand after startForeground.
                 val startupThread =
@@ -221,6 +224,9 @@ class TunnelVpnService : VpnService() {
                                 inclusivePackages,
                                 exclusivePackages,
                                 proxyConfig,
+                                useDefaultGateway,
+                                configuredRoutes,
+                                useDeviceDns,
                             )
                         },
                         "tun-setup",
@@ -311,6 +317,9 @@ class TunnelVpnService : VpnService() {
         inclusivePackages: ArrayList<String>?,
         exclusivePackages: ArrayList<String>?,
         proxyConfig: ProxyRuntimeConfig,
+        useDefaultGateway: Boolean,
+        configuredRoutes: List<String>,
+        useDeviceDns: Boolean,
     ) {
         val currentSetupThread = Thread.currentThread()
         val nativeOwner = nativeOwner(attemptId)
@@ -382,6 +391,8 @@ class TunnelVpnService : VpnService() {
                 return
             }
             VpnBridge.nativeSetSocketProtectionEnabled(true)
+            // Ask the server for its routes (DHCPINFORM after IPCP) only when the VPN is not the default gateway.
+            VpnBridge.nativeSetDhcpInformEnabled(!useDefaultGateway)
             // Phase 1: negotiate IKE+L2TP+PPP on the real network (no VPN tunnel yet).
             val negotiatedClientIp = IntArray(4)
             val negotiatedPrimaryDns = IntArray(4)
@@ -432,13 +443,13 @@ class TunnelVpnService : VpnService() {
             )
             val automaticDnsServers = DnsConfigSupport.negotiatedServers(negotiatedPrimaryDns, negotiatedSecondaryDns)
             val manualDnsServers =
-                if (dnsAutomatic) {
+                if (dnsAutomatic || useDeviceDns) {
                     emptyList()
                 } else {
                     DnsConfigSupport.resolveUpstreamServers(dnsServers)
                 }
-            if ((dnsAutomatic && automaticDnsServers.isEmpty()) ||
-                (!dnsAutomatic && manualDnsServers.isEmpty())
+            if (!useDeviceDns &&
+                ((dnsAutomatic && automaticDnsServers.isEmpty()) || (!dnsAutomatic && manualDnsServers.isEmpty()))
             ) {
                 emitAttemptState(
                     attemptId,
@@ -461,7 +472,7 @@ class TunnelVpnService : VpnService() {
             if (!shouldHandleAttempt(attemptId, "pre-tun-establish")) {
                 return
             }
-            if (!dnsAutomatic) {
+            if (!dnsAutomatic && !useDeviceDns) {
                 val dnsLogger = { level: Int, message: String ->
                     VpnTunnelEvents.emitEngineLog(level, TAG, "${prefixAttempt(attemptId)}$message")
                 }
@@ -502,12 +513,31 @@ class TunnelVpnService : VpnService() {
             } else {
                 VpnBridge.nativeSetVpnDnsInterceptIpv4(null)
             }
+            val serverRoutes =
+                if (useDefaultGateway) emptyList() else serverRoutesFromNative(VpnBridge.nativeNegotiatedRoutes())
+            val tunDnsServers =
+                if (useDeviceDns) emptyList() else tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)
+            val tunRoutes =
+                tunRoutesForBuilder(
+                    useDefaultGateway = useDefaultGateway,
+                    configuredRoutes = configuredRoutes,
+                    serverRoutes = serverRoutes,
+                    assignedIpv4 = if (useIpcpAddress) tunIpv4 else null,
+                    dnsServers = tunDnsServers,
+                )
+            VpnTunnelEvents.emitEngineLog(
+                Log.INFO,
+                TAG,
+                "${prefixAttempt(attemptId)}TUN routes defaultGateway=$useDefaultGateway serverRoutes=${serverRoutes.size} configuredRoutes=${configuredRoutes.size} dns=${if (useDeviceDns) "device" else tunDnsServers.joinToString(",")}: ${tunRoutes.joinToString(", ")}",
+            )
             val builder = Builder()
                 .setSession(getString(R.string.vpn_session_name))
                 .setMtu(tunMtu)
                 .addAddress(addressForTun, 32)
-                .addRoute("0.0.0.0", 0)
-            for (dnsServer in tunDnsServersForBuilder(dnsAutomatic, automaticDnsServers)) {
+            for (route in tunRoutes) {
+                builder.addRoute(route.address, route.prefixLength)
+            }
+            for (dnsServer in tunDnsServers) {
                 builder.addDnsServer(dnsServer)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -988,6 +1018,9 @@ class TunnelVpnService : VpnService() {
         const val EXTRA_PROXY_HTTP_PORT = "proxyHttpPort"
         const val EXTRA_PROXY_SOCKS_PORT = "proxySocksPort"
         const val EXTRA_PROXY_ALLOW_LAN = "proxyAllowLan"
+        const val EXTRA_USE_DEFAULT_GATEWAY = "useDefaultGateway"
+        const val EXTRA_ROUTES = "routes"
+        const val EXTRA_USE_DEVICE_DNS = "useDeviceDns"
 
         private const val CHANNEL_ID = "tunnel_forge_vpn"
         private const val NOTIFICATION_ID = 7101
@@ -1082,6 +1115,85 @@ class TunnelVpnService : VpnService() {
             } else {
                 listOf(MANUAL_DNS_VIRTUAL_IPV4)
             }
+
+        /**
+         * Parses `a.b.c.d` (host route) or `a.b.c.d/n`. Host bits are cleared because [Builder.addRoute]
+         * rejects addresses with bits set beyond the prefix.
+         */
+        internal fun parseIpv4Route(text: String): Ipv4Route? {
+            val token = text.trim()
+            if (token.isEmpty()) return null
+            val slash = token.indexOf('/')
+            val addressText = if (slash < 0) token else token.substring(0, slash)
+            val prefix =
+                if (slash < 0) {
+                    32
+                } else {
+                    token.substring(slash + 1).trim().toIntOrNull() ?: return null
+                }
+            if (prefix !in 0..32) return null
+            val octets = addressText.trim().split('.')
+            if (octets.size != 4) return null
+            var value = 0L
+            for (octet in octets) {
+                val part = octet.trim().toIntOrNull() ?: return null
+                if (part !in 0..255) return null
+                value = (value shl 8) or part.toLong()
+            }
+            val mask = if (prefix == 0) 0L else (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+            val network = value and mask
+            val address =
+                "${(network shr 24) and 0xFF}.${(network shr 16) and 0xFF}.${(network shr 8) and 0xFF}.${network and 0xFF}"
+            return Ipv4Route(address, prefix)
+        }
+
+        /** Network of [ipv4] by address class, the route Windows adds when "Use default gateway" is off. */
+        internal fun classfulRouteFor(ipv4: String): Ipv4Route? {
+            val first = ipv4.trim().substringBefore('.').toIntOrNull() ?: return null
+            val prefix =
+                when (first) {
+                    in 1..126 -> 8
+                    in 128..191 -> 16
+                    in 192..223 -> 24
+                    else -> return null
+                }
+            return parseIpv4Route("$ipv4/$prefix")
+        }
+
+        /** [VpnBridge.nativeNegotiatedRoutes] layout: four address octets and the prefix length per route. */
+        internal fun serverRoutesFromNative(raw: IntArray?): List<Ipv4Route> {
+            if (raw == null) return emptyList()
+            val out = mutableListOf<Ipv4Route>()
+            var i = 0
+            while (i + 4 < raw.size) {
+                parseIpv4Route("${raw[i]}.${raw[i + 1]}.${raw[i + 2]}.${raw[i + 3]}/${raw[i + 4]}")?.let { out += it }
+                i += 5
+            }
+            return out
+        }
+
+        /**
+         * TUN routes. As default gateway the VPN takes 0.0.0.0/0. Otherwise: routes pushed by the server plus the
+         * configured ones; when both are empty, the network of the assigned address (Windows behaviour); and a /32
+         * route to every DNS server handed to Android so that DNS goes through the tunnel.
+         */
+        internal fun tunRoutesForBuilder(
+            useDefaultGateway: Boolean,
+            configuredRoutes: List<String>,
+            serverRoutes: List<Ipv4Route>,
+            assignedIpv4: String?,
+            dnsServers: List<String>,
+        ): List<Ipv4Route> {
+            if (useDefaultGateway) return listOf(Ipv4Route("0.0.0.0", 0))
+            val routes = LinkedHashSet<Ipv4Route>()
+            routes += serverRoutes
+            configuredRoutes.mapNotNullTo(routes) { parseIpv4Route(it) }
+            if (routes.isEmpty() && assignedIpv4 != null) {
+                classfulRouteFor(assignedIpv4)?.let { routes += it }
+            }
+            dnsServers.mapNotNullTo(routes) { parseIpv4Route("$it/32") }
+            return routes.toList()
+        }
 
         internal fun manualDnsServersFromIntent(intent: Intent): List<DnsServerConfig> {
             val servers =
@@ -1187,6 +1299,11 @@ class TunnelVpnService : VpnService() {
 
     private fun prefixAttempt(attemptId: String): String =
         if (attemptId.isEmpty()) "" else "attempt=$attemptId "
+}
+
+/** One IPv4 route for [VpnService.Builder.addRoute]; [address] is already a network address. */
+internal data class Ipv4Route(val address: String, val prefixLength: Int) {
+    override fun toString(): String = "$address/$prefixLength"
 }
 
 internal object TunnelVpnServiceStopPolicy {
