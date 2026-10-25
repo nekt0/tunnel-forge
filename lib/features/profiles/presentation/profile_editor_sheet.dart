@@ -318,24 +318,27 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     );
     final deviceDnsTitle = AppText.pick(
       'Use device DNS',
-      'استفاده از DNS دستگاه',
+      'Использовать DNS устройства',
     );
     final deviceDnsHelp = AppText.pick(
       'Keep the phone\'s own DNS servers instead of the VPN server\'s.',
-      'سرورهای DNS خود گوشی به جای سرورهای وی‌پی‌ان استفاده شوند.',
+      'Использовать DNS-серверы телефона вместо серверов VPN.',
     );
     final gatewayTitle = AppText.pick(
       'Use VPN as default gateway',
-      'استفاده از وی‌پی‌ان به‌عنوان دروازه پیش‌فرض',
+      'Использовать VPN как шлюз по умолчанию',
     );
     final gatewayHelp = AppText.pick(
       'Send all traffic through the VPN. When off, only the server routes and the routes below use the VPN.',
-      'همه ترافیک از وی‌پی‌ان عبور کند. در حالت خاموش فقط مسیرهای سرور و مسیرهای زیر از وی‌پی‌ان استفاده می‌کنند.',
+      'Весь трафик идёт через VPN. Если выключено, через VPN идут только маршруты сервера и маршруты ниже.',
     );
-    final routesLabel = AppText.pick('Routes through VPN', 'مسیرهای وی‌پی‌ان');
+    final routesLabel = AppText.pick(
+      'Routes through VPN',
+      'Маршруты через VPN',
+    );
     final routesHelp = AppText.pick(
       'Added to the routes from the server. Leave empty to use only the server routes.',
-      'به مسیرهای سرور اضافه می‌شوند. برای استفاده فقط از مسیرهای سرور خالی بگذارید.',
+      'Добавляются к маршрутам от сервера. Оставьте пустым, чтобы использовать только маршруты сервера.',
     );
 
     return BlocConsumer<ProfileFormBloc, ProfileFormState>(
