@@ -89,6 +89,9 @@ class TunnelConnectRequest extends Equatable {
     required this.connectionMode,
     required this.splitTunnelSettings,
     required this.proxySettings,
+    this.useDefaultGateway = false,
+    this.routes = const <String>[],
+    this.useDeviceDns = false,
   });
 
   final String attemptId;
@@ -105,6 +108,15 @@ class TunnelConnectRequest extends Equatable {
   final SplitTunnelSettings splitTunnelSettings;
   final ProxySettings proxySettings;
 
+  /// Route all traffic through the VPN instead of only the server routes and [routes].
+  final bool useDefaultGateway;
+
+  /// Extra IPv4 networks (`a.b.c.d/n`) added to the routes pushed by the server.
+  final List<String> routes;
+
+  /// Keep the device's DNS servers instead of the VPN server's or custom ones.
+  final bool useDeviceDns;
+
   @override
   List<Object?> get props => [
     attemptId,
@@ -120,6 +132,9 @@ class TunnelConnectRequest extends Equatable {
     connectionMode,
     splitTunnelSettings,
     proxySettings,
+    useDefaultGateway,
+    routes,
+    useDeviceDns,
   ];
 }
 
