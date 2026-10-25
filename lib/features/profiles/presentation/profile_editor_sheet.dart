@@ -83,6 +83,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
   late final TextEditingController _pskController;
   late final TextEditingController _dns1Controller;
   late final TextEditingController _dns2Controller;
+  late final TextEditingController _routesController;
   late final TextEditingController _mtuController;
   bool _passwordVisible = false;
   bool _pskVisible = false;
@@ -98,6 +99,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     _pskController = TextEditingController();
     _dns1Controller = TextEditingController();
     _dns2Controller = TextEditingController();
+    _routesController = TextEditingController();
     _mtuController = TextEditingController();
   }
 
@@ -110,6 +112,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
     _pskController.dispose();
     _dns1Controller.dispose();
     _dns2Controller.dispose();
+    _routesController.dispose();
     _mtuController.dispose();
     super.dispose();
   }
@@ -313,6 +316,27 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
       Profile.maxVpnMtu,
       Profile.defaultVpnMtu,
     );
+    final deviceDnsTitle = AppText.pick(
+      'Use device DNS',
+      'استفاده از DNS دستگاه',
+    );
+    final deviceDnsHelp = AppText.pick(
+      'Keep the phone\'s own DNS servers instead of the VPN server\'s.',
+      'سرورهای DNS خود گوشی به جای سرورهای وی‌پی‌ان استفاده شوند.',
+    );
+    final gatewayTitle = AppText.pick(
+      'Use VPN as default gateway',
+      'استفاده از وی‌پی‌ان به‌عنوان دروازه پیش‌فرض',
+    );
+    final gatewayHelp = AppText.pick(
+      'Send all traffic through the VPN. When off, only the server routes and the routes below use the VPN.',
+      'همه ترافیک از وی‌پی‌ان عبور کند. در حالت خاموش فقط مسیرهای سرور و مسیرهای زیر از وی‌پی‌ان استفاده می‌کنند.',
+    );
+    final routesLabel = AppText.pick('Routes through VPN', 'مسیرهای وی‌پی‌ان');
+    final routesHelp = AppText.pick(
+      'Added to the routes from the server. Leave empty to use only the server routes.',
+      'به مسیرهای سرور اضافه می‌شوند. برای استفاده فقط از مسیرهای سرور خالی بگذارید.',
+    );
 
     return BlocConsumer<ProfileFormBloc, ProfileFormState>(
       listenWhen: (previous, current) =>
@@ -335,6 +359,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
         _syncController(_pskController, state.psk);
         _syncController(_dns1Controller, state.dns1);
         _syncController(_dns2Controller, state.dns2);
+        _syncController(_routesController, state.routes);
         _syncController(_mtuController, state.mtu);
 
         if (state.loadError != null) {
@@ -461,7 +486,7 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                             contentPadding: EdgeInsets.zero,
                             title: Text(t.automatic),
                             subtitle: Text(t.automaticDnsHelp),
-                            onChanged: state.loading
+                            onChanged: state.loading || state.dnsUseDevice
                                 ? null
                                 : (value) =>
                                       context.read<ProfileFormBloc>().add(
@@ -470,7 +495,17 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                                         ),
                                       ),
                           ),
-                          if (!state.dnsAutomatic) ...[
+                          SwitchListTile(
+                            key: const Key('dns_use_device_switch'),
+                            value: state.dnsUseDevice,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(deviceDnsTitle),
+                            subtitle: Text(deviceDnsHelp),
+                            onChanged: (value) => context
+                                .read<ProfileFormBloc>()
+                                .add(ProfileFormDnsUseDeviceChanged(value)),
+                          ),
+                          if (!state.dnsAutomatic && !state.dnsUseDevice) ...[
                             const SizedBox(height: 12),
                             _dnsSection(
                               context,
@@ -478,6 +513,41 @@ class _ProfileEditorViewState extends State<ProfileEditorView> {
                               theme,
                               tt,
                               dnsSectionColor,
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          SwitchListTile(
+                            key: const Key('default_gateway_switch'),
+                            value: state.useDefaultGateway,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(gatewayTitle),
+                            subtitle: Text(gatewayHelp),
+                            onChanged: (value) => context
+                                .read<ProfileFormBloc>()
+                                .add(ProfileFormGatewayChanged(value)),
+                          ),
+                          if (!state.useDefaultGateway) ...[
+                            const SizedBox(height: 12),
+                            TextField(
+                              key: const Key('routes_field'),
+                              controller: _routesController,
+                              keyboardType: TextInputType.text,
+                              minLines: 1,
+                              maxLines: 4,
+                              onChanged: (value) => context
+                                  .read<ProfileFormBloc>()
+                                  .add(ProfileFormRoutesChanged(value)),
+                              decoration:
+                                  _deco(
+                                    context,
+                                    label: routesLabel,
+                                    hint: '192.168.10.0/24, 10.0.0.0/8',
+                                  ).copyWith(
+                                    errorText: state.routesErrorText,
+                                    errorMaxLines: 2,
+                                    helperText: routesHelp,
+                                    helperMaxLines: 3,
+                                  ),
                             ),
                           ],
                           const SizedBox(height: 12),
