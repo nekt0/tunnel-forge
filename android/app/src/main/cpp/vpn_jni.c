@@ -4,6 +4,7 @@
  */
 #include "engine.h"
 #include "gvisor_bridge.h"
+#include "ppp.h"
 
 #include <android/log.h>
 #include <stdlib.h>
@@ -105,6 +106,29 @@ cleanup:
     (*env)->ReleaseStringUTFChars(env, jpassword, password);
   if (psk != NULL)
     (*env)->ReleaseStringUTFChars(env, jpsk, psk);
+  return out;
+}
+
+static void native_set_dhcp_inform_enabled(JNIEnv *env, jclass clazz, jboolean enabled) {
+  (void)env;
+  (void)clazz;
+  ppp_set_dhcp_inform_enabled(enabled ? 1 : 0);
+}
+
+static jintArray native_negotiated_routes(JNIEnv *env, jclass clazz) {
+  (void)clazz;
+  uint8_t routes[PPP_DHCP_ROUTES_MAX][5];
+  jint tmp[PPP_DHCP_ROUTES_MAX * 5];
+  int n = ppp_dhcp_routes(routes, PPP_DHCP_ROUTES_MAX);
+  for (int i = 0; i < n; i++) {
+    for (int k = 0; k < 5; k++)
+      tmp[i * 5 + k] = (jint)routes[i][k];
+  }
+  jintArray out = (*env)->NewIntArray(env, (jsize)(n * 5));
+  if (out == NULL)
+    return NULL;
+  if (n > 0)
+    (*env)->SetIntArrayRegion(env, out, 0, (jsize)(n * 5), tmp);
   return out;
 }
 
@@ -403,6 +427,8 @@ static int register_vpn_bridge(JNIEnv *env) {
        (void *)native_run_tunnel},
       {"nativeNegotiate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I[I[I[I)I",
        (void *)native_negotiate},
+      {"nativeSetDhcpInformEnabled", "(Z)V", (void *)native_set_dhcp_inform_enabled},
+      {"nativeNegotiatedRoutes", "()[I", (void *)native_negotiated_routes},
       {"nativeSetSocketProtectionEnabled", "(Z)V", (void *)native_set_socket_protection_enabled},
       {"nativeStartLoop", "(I)I", (void *)native_start_loop},
       {"nativeStartProxyLoop", "()I", (void *)native_start_proxy_loop},

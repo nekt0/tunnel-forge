@@ -9,9 +9,21 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
+/** Upper bound of server routes kept from one DHCPINFORM answer. */
+#define PPP_DHCP_ROUTES_MAX 32
+
 /** LCP + auth + IPCP on the L2TP session (recv/tx over esp_fd). */
 int ppp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len, l2tp_session_t *l2tp,
                   const char *user, const char *password, int tun_mtu, ppp_session_t *ppp);
+
+/**
+ * One-shot switch for the next ppp_negotiate(): after IPCP, send DHCPINFORM and collect the server's classless
+ * static routes (DHCP options 121/249), as Windows RAS clients do. ppp_negotiate() clears it.
+ */
+void ppp_set_dhcp_inform_enabled(int enabled);
+
+/** Routes from the last ppp_negotiate(): 4 network octets + prefix length per entry; returns the count. */
+int ppp_dhcp_routes(uint8_t out[][5], int max);
 
 /** TUN IPv4 packet -> PPP/L2TP/ESP toward peer (checksum fix + MSS clamp per ppp_session_t). */
 int ppp_encapsulate_and_send(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, socklen_t peer_len,

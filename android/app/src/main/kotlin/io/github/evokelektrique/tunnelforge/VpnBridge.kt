@@ -27,6 +27,17 @@ object VpnBridge {
         outSecondaryDnsIpv4: IntArray?,
     ): Int
 
+    /**
+     * One-shot switch for the next [nativeNegotiate]: after IPCP, send DHCPINFORM over the PPP link and collect the
+     * server's static routes (DHCP options 121/249), as Windows RAS clients do.
+     */
+    @JvmStatic
+    external fun nativeSetDhcpInformEnabled(enabled: Boolean)
+
+    /** Routes learned by the last [nativeNegotiate]: groups of five ints (four address octets, prefix length). */
+    @JvmStatic
+    external fun nativeNegotiatedRoutes(): IntArray?
+
     @JvmStatic
     external fun nativeSetSocketProtectionEnabled(enabled: Boolean)
 
